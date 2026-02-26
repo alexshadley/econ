@@ -13,6 +13,7 @@ from rich.text import Text
 
 from app.config import GAME_DURATION_SECONDS
 from app.events import Event
+from app.models import FACTORY_IO, FactoryType
 
 
 FIRM_STYLES = {
@@ -79,8 +80,18 @@ class GameDisplay:
 
         state = self._engine.get_state_snapshot()
         firms = state.get("firms", {})
+
+        # Compute pending outputs from active factory jobs
+        pending: dict[str, dict[str, int]] = {}
+        for job in self._engine.get_factory_jobs_snapshot():
+            fid = job["firm_id"]
+            ft = FactoryType(job["factory_type"])
+            _, output = FACTORY_IO[ft]
+            pending.setdefault(fid, {})
+            pending[fid][output.value] = pending[fid].get(output.value, 0) + job["count"]
+
         for fid in ["firm_a", "firm_b", "firm_c"]:
-            layout[fid].update(self._render_firm_card(fid, firms.get(fid, {})))
+            layout[fid].update(self._render_firm_card(fid, firms.get(fid, {}), pending.get(fid, {})))
 
         layout["contracts"].update(self._render_contracts())
         layout["messages"].update(self._render_messages())
@@ -129,13 +140,14 @@ class GameDisplay:
             padding=(0, 1),
         )
 
-    def _render_firm_card(self, firm_id: str, data: dict) -> Panel:
+    def _render_firm_card(self, firm_id: str, data: dict, pending: dict[str, int] | None = None) -> Panel:
         s = FIRM_STYLES[firm_id]
         color = s["color"]
         cash = data.get("cash", 0)
         inv = data.get("inventory", {})
         facs = data.get("factories", {})
         running = data.get("running_factories", {})
+        pending = pending or {}
 
         lines: list[Text] = []
 
@@ -148,6 +160,7 @@ class GameDisplay:
         # Inventory bars
         for comm in ["ore", "metal", "parts", "cars"]:
             qty = inv.get(comm, 0)
+            pend = pending.get(comm, 0)
             line = Text()
             line.append(f" {comm:<6} ", style="dim")
             if qty > 0:
@@ -158,6 +171,11 @@ class GameDisplay:
                 line.append(f" {qty}", style="bold")
             else:
                 line.append("·", style="grey30")
+            if pend > 0:
+                pend_bar_len = min(pend, 6)
+                line.append(" ")
+                line.append("░" * pend_bar_len, style=f"dim {color}")
+                line.append(f" +{pend}", style="dim italic")
             lines.append(line)
 
         lines.append(Text())
