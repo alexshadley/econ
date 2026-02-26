@@ -115,12 +115,13 @@ async def run_game(save_data: dict | None = None) -> None:
     interrupted = shutdown_event.is_set()
     game_completed = not interrupted
 
-    # Stop the game and agents
-    engine.stop_game()
-    for a in agents:
-        a.stop()
-    await asyncio.gather(*agent_tasks, return_exceptions=True)
+    # Cancel all tasks immediately — don't wait for in-flight API calls
+    for t in agent_tasks:
+        t.cancel()
     refresh_task.cancel()
+    await asyncio.gather(*agent_tasks, refresh_task, return_exceptions=True)
+
+    engine.stop_game()
 
     # Stop TUI before saving so terminal is clean
     display.stop()
