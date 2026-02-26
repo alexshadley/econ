@@ -112,7 +112,7 @@ class GameDisplay:
     def _render_game_screen(self) -> Layout:
         layout = Layout()
         layout.split_column(
-            Layout(name="header", size=5),
+            Layout(name="header", size=6),
             Layout(name="body"),
         )
         layout["body"].split_column(
@@ -166,8 +166,13 @@ class GameDisplay:
         bar.append("━" * remaining_width, style="grey23")
         bar.append(f"  {mins}:{secs:02d}", style="bold white")
 
+        cost_line = Text(justify="center")
+        api_cost = self._engine.total_api_cost
+        cost_line.append("API Cost: ", style="dim")
+        cost_line.append(f"${api_cost:.4f}", style="bold bright_yellow")
+
         return Panel(
-            Group(Align.center(title), Align.center(chain), Align.center(bar)),
+            Group(Align.center(title), Align.center(chain), Align.center(bar), Align.center(cost_line)),
             border_style="bright_cyan",
             padding=(0, 1),
         )
@@ -258,7 +263,7 @@ class GameDisplay:
         layout.split_column(
             Layout(name="top", size=6),
             Layout(name="results"),
-            Layout(name="footer", size=3),
+            Layout(name="footer", size=4),
         )
 
         # Title
@@ -338,11 +343,18 @@ class GameDisplay:
         ))
 
         # Footer
-        footer = Text(justify="center")
-        footer.append("Exiting in a few seconds...", style="dim italic")
-        layout["footer"].update(Align.center(footer, vertical="middle"))
+        footer_lines: list[Text] = []
+        cost_text = Text(justify="center")
+        cost_text.append("Total API Cost: ", style="dim")
+        cost_text.append(f"${self._engine.total_api_cost:.4f}", style="bold bright_yellow")
+        footer_lines.append(cost_text)
+        exit_text = Text(justify="center")
+        exit_text.append("Exiting in a few seconds...", style="dim italic")
+        footer_lines.append(exit_text)
+        layout["footer"].update(Align.center(Group(*footer_lines), vertical="middle"))
 
         return layout
+
 
     # --- Lifecycle ---
 
@@ -397,4 +409,6 @@ class GameDisplay:
                 f"[{color}]{'█' * bar_len}[/]  "
                 f"[bold]${r['cash']:,.2f}[/]"
             )
+        c.print()
+        c.print(f"  [dim]Total API Cost:[/] [bold bright_yellow]${self._engine.total_api_cost:.4f}[/]")
         c.print()

@@ -36,6 +36,7 @@ class GameEngine:
         self._factory_jobs: list[FactoryJob] = []
         self._game_running = False
         self._start_time: float = 0.0
+        self.total_api_cost: float = 0.0
 
         # Per-agent asyncio.Event for wait/notify
         self._agent_wake_events: dict[str, asyncio.Event] = {}
