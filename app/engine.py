@@ -58,6 +58,47 @@ class GameEngine:
             )
             self._agent_wake_events[firm_id] = asyncio.Event()
 
+    def restore_from_save(self, save_data: dict) -> None:
+        """Restore firm states from a save file instead of using defaults."""
+        firms_data = save_data["firms"]
+        for firm_id, fdata in firms_data.items():
+            self._firms[firm_id] = Firm(
+                id=firm_id,
+                name=fdata["name"],
+                cash=fdata["cash"],
+                inventory={Commodity(k): v for k, v in fdata["inventory"].items()},
+                factories={FactoryType(k): v for k, v in fdata["factories"].items()},
+                running_factories={ft: 0 for ft in FactoryType},
+            )
+            self._agent_wake_events[firm_id] = asyncio.Event()
+
+    def finalize_factory_jobs(self) -> None:
+        """Complete all in-progress factory jobs immediately.
+
+        Adds output to inventory and resets running_factories to 0.
+        Called before saving so we don't need to track partial progress.
+        """
+        for job in self._factory_jobs:
+            _, output_commodity = FACTORY_IO[job.factory_type]
+            firm = self._firms[job.firm_id]
+            firm.inventory[output_commodity] += job.count
+            firm.running_factories[job.factory_type] = max(
+                0, firm.running_factories[job.factory_type] - job.count
+            )
+        self._factory_jobs.clear()
+
+    def to_save_dict(self) -> dict:
+        """Return a serializable dict of all firm states."""
+        result = {}
+        for firm_id, firm in self._firms.items():
+            result[firm_id] = {
+                "name": firm.name,
+                "cash": round(firm.cash, 2),
+                "inventory": {c.value: firm.inventory[c] for c in Commodity},
+                "factories": {ft.value: firm.factories[ft] for ft in FactoryType},
+            }
+        return result
+
     def start_game(self) -> None:
         self._start_time = time.time()
         self._game_running = True
