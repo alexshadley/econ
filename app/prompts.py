@@ -26,7 +26,7 @@ def build_system_prompt(firm_id: str) -> str:
 YOUR GOAL: Maximize your cash balance by the end of the game (5 minutes).
 
 YOUR STARTING POSITION:
-- 10 {factory_desc}s
+- 10 {factory_desc}s (this is just your starting type — you can buy ANY factory type)
 - $100 cash
 - No inventory
 
@@ -36,7 +36,7 @@ THE ECONOMY:
 - Ore can be bought from the market for $1/unit
 - Cars can be sold to the market for $10/unit
 - Metal and parts can ONLY be traded between firms via contracts
-- New factories cost $10 each (you can buy any type)
+- New factories cost $10 each — you can buy ANY type (metal, part, or car), not just your starting type
 - Production cost per unit = 1 + 1/n^0.3 where n = number of factories of that type you own
   (at 10 factories: ~$1.50/unit, at 20: ~$1.39/unit)
 
@@ -46,7 +46,7 @@ OTHER FIRMS:
 STRATEGY GUIDANCE:
 - You need to trade with other firms to get inputs or sell outputs
 - Negotiate prices that give you good margins
-- Consider vertical integration (buying other factory types)
+- Consider vertical integration — buying other factory types lets you control more of the supply chain and avoid depending on trades
 - Time is limited - act quickly, start production early and often
 - Use the wait tool after starting factories instead of polling
 - Check messages and contracts frequently
