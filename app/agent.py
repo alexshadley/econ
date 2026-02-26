@@ -60,6 +60,7 @@ class Agent:
             messages=self.conversation_history,
             tools=self._tools,
             tool_choice="auto",
+            reasoning_effort="low",
         )
 
         message = response.choices[0].message
