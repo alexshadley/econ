@@ -1,6 +1,17 @@
 import asyncio
 import logging
+import os
 import time
+from pathlib import Path
+
+# Load .env file
+_env_path = Path(__file__).resolve().parent.parent / ".env"
+if _env_path.exists():
+    for line in _env_path.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            key, _, value = line.partition("=")
+            os.environ.setdefault(key.strip(), value.strip())
 
 from app.agent import Agent
 from app.config import FIRM_CONFIGS, GAME_DURATION_SECONDS
