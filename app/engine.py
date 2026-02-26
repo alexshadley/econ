@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from app.config import (
     CAR_SELL_PRICE,
+    CONTRACT_EXPIRY_SECONDS,
     FACTORY_BUY_PRICE,
     FACTORY_PRODUCTION_SECONDS,
     GAME_DURATION_SECONDS,
@@ -240,7 +241,12 @@ class GameEngine:
             firm = self._firms[firm_id]
             total_cost = quantity * ORE_BUY_PRICE
             if firm.cash < total_cost:
-                return f"error: insufficient cash (need ${total_cost:.2f}, have ${firm.cash:.2f})"
+                max_affordable = int(firm.cash / ORE_BUY_PRICE)
+                return (
+                    f"error: insufficient cash to buy {quantity} ore "
+                    f"(need ${total_cost:.2f}, have ${firm.cash:.2f}). "
+                    f"You can afford up to {max_affordable} ore."
+                )
             firm.cash -= total_cost
             firm.inventory[Commodity.ORE] += quantity
         await self._event_bus.publish(Event(
@@ -256,7 +262,18 @@ class GameEngine:
         async with self._lock:
             firm = self._firms[firm_id]
             if firm.inventory[Commodity.CARS] < quantity:
-                return f"error: insufficient cars (have {firm.inventory[Commodity.CARS]})"
+                have = firm.inventory[Commodity.CARS]
+                running = firm.running_factories[FactoryType.CAR]
+                if running > 0:
+                    return (
+                        f"error: you only have {have} cars (need {quantity}). "
+                        f"You have {running} car factories currently running — "
+                        f"wait for production to complete."
+                    )
+                return (
+                    f"error: you only have {have} cars (need {quantity}). "
+                    f"Run car factories with parts to produce more."
+                )
             total_revenue = quantity * CAR_SELL_PRICE
             firm.inventory[Commodity.CARS] -= quantity
             firm.cash += total_revenue
@@ -280,7 +297,12 @@ class GameEngine:
             firm = self._firms[firm_id]
             total_cost = quantity * FACTORY_BUY_PRICE
             if firm.cash < total_cost:
-                return f"error: insufficient cash (need ${total_cost:.2f}, have ${firm.cash:.2f})"
+                max_affordable = int(firm.cash / FACTORY_BUY_PRICE)
+                return (
+                    f"error: insufficient cash to buy {quantity} {factory_type_str} factories "
+                    f"(need ${total_cost:.2f}, have ${firm.cash:.2f}). "
+                    f"You can afford up to {max_affordable}."
+                )
             firm.cash -= total_cost
             firm.factories[factory_type] += quantity
         await self._event_bus.publish(Event(
@@ -304,18 +326,43 @@ class GameEngine:
 
         async with self._lock:
             firm = self._firms[firm_id]
-            idle = firm.factories[factory_type] - firm.running_factories[factory_type]
+            total = firm.factories[factory_type]
+            running = firm.running_factories[factory_type]
+            idle = total - running
             if count > idle:
-                return f"error: only {idle} idle {factory_type_str} factories (requested {count})"
-            if firm.inventory[input_commodity] < count:
+                if idle == 0 and running > 0:
+                    return (
+                        f"error: all {total} of your {factory_type_str} factories "
+                        f"are currently running. Wait for production to complete "
+                        f"or buy more factories."
+                    )
+                return (
+                    f"error: only {idle} idle {factory_type_str} factories "
+                    f"(requested {count}). {running} of your {total} are "
+                    f"currently running."
+                )
+            have_input = firm.inventory[input_commodity]
+            if have_input < count:
+                if have_input == 0:
+                    return (
+                        f"error: you have no {input_commodity.value}. "
+                        f"Each {factory_type_str} factory requires 1 "
+                        f"{input_commodity.value} to run."
+                    )
                 return (
                     f"error: insufficient {input_commodity.value} "
-                    f"(have {firm.inventory[input_commodity]}, need {count})"
+                    f"(have {have_input}, need {count}). "
+                    f"You can run up to {have_input} factories with "
+                    f"your current {input_commodity.value}."
                 )
             cost_per_unit = self._production_cost_per_unit(firm.factories[factory_type])
             total_cost = cost_per_unit * count
             if firm.cash < total_cost:
-                return f"error: insufficient cash (need ${total_cost:.2f}, have ${firm.cash:.2f})"
+                return (
+                    f"error: insufficient cash to run {count} factories "
+                    f"(need ${total_cost:.2f}, have ${firm.cash:.2f}, "
+                    f"short ${total_cost - firm.cash:.2f})"
+                )
 
             # Deduct inputs
             firm.inventory[input_commodity] -= count
@@ -381,6 +428,113 @@ class GameEngine:
 
     # --- Contracts ---
 
+    async def _expire_contract(self, contract_id: str) -> None:
+        """Expire a contract after CONTRACT_EXPIRY_SECONDS if still pending."""
+        await asyncio.sleep(CONTRACT_EXPIRY_SECONDS)
+        async with self._lock:
+            contract = self._contracts.get(contract_id)
+            if not contract or contract.status != "pending":
+                return
+            contract.status = "expired"
+        await self._event_bus.publish(Event(
+            type=EventType.CONTRACT_REJECTED, firm_id=contract.sender_id,
+            data={"contract_id": contract_id, "reason": "expired"},
+            timestamp=time.time(),
+        ))
+        # Wake both parties so they know the contract expired
+        self._notify_agent(contract.sender_id)
+        self._notify_agent(contract.recipient_id)
+
+    def _try_auto_resolve_locked(self, new_contract: Contract) -> dict | None:
+        """Check if new contract can auto-resolve with an existing compatible one.
+
+        Must be called with self._lock held. Returns resolution info dict or None.
+        """
+        # Determine buyer/seller for the new contract
+        if new_contract.side == ContractSide.BUY:
+            new_buyer = new_contract.sender_id
+            new_seller = new_contract.recipient_id
+        else:
+            new_buyer = new_contract.recipient_id
+            new_seller = new_contract.sender_id
+
+        # Search for matching pending contract (oldest first)
+        candidates = sorted(
+            (c for c in self._contracts.values()
+             if c.id != new_contract.id and c.status == "pending"
+             and c.commodity == new_contract.commodity),
+            key=lambda c: c.created_at,
+        )
+
+        for existing in candidates:
+            if existing.side == ContractSide.BUY:
+                exist_buyer = existing.sender_id
+                exist_seller = existing.recipient_id
+            else:
+                exist_buyer = existing.recipient_id
+                exist_seller = existing.sender_id
+
+            # Must be same trade direction (same buyer and seller)
+            if exist_buyer != new_buyer or exist_seller != new_seller:
+                continue
+
+            # Need one BUY and one SELL to have both price perspectives
+            if new_contract.side == existing.side:
+                continue
+
+            # Determine buyer's and seller's prices
+            if new_contract.side == ContractSide.BUY:
+                buyer_price = new_contract.price_per_unit
+                seller_price = existing.price_per_unit
+            else:
+                buyer_price = existing.price_per_unit
+                seller_price = new_contract.price_per_unit
+
+            # Compatible: buyer willing to pay >= seller's ask
+            if buyer_price < seller_price:
+                continue
+
+            # Only auto-match exact quantities
+            if new_contract.quantity != existing.quantity:
+                continue
+
+            # Execute the trade at the average price
+            trade_qty = new_contract.quantity
+            trade_price = (buyer_price + seller_price) / 2
+            total_cost = trade_qty * trade_price
+
+            buyer = self._firms[new_buyer]
+            seller = self._firms[new_seller]
+
+            # Validate both sides can actually fulfill
+            if buyer.cash < total_cost:
+                continue
+            if seller.inventory[new_contract.commodity] < trade_qty:
+                continue
+
+            # Execute atomic transfer
+            buyer.cash -= total_cost
+            seller.cash += total_cost
+            seller.inventory[new_contract.commodity] -= trade_qty
+            buyer.inventory[new_contract.commodity] += trade_qty
+            new_contract.status = "accepted"
+            existing.status = "accepted"
+
+            return {
+                "buyer": new_buyer,
+                "seller": new_seller,
+                "quantity": trade_qty,
+                "commodity": new_contract.commodity.value,
+                "trade_price": trade_price,
+                "total_cost": total_cost,
+                "buyer_price": buyer_price,
+                "seller_price": seller_price,
+                "existing_contract_id": str(existing.id),
+                "new_contract_id": str(new_contract.id),
+            }
+
+        return None
+
     async def send_contract(
         self,
         sender_id: str,
@@ -421,6 +575,7 @@ class GameEngine:
 
         async with self._lock:
             self._contracts[str(contract.id)] = contract
+            auto = self._try_auto_resolve_locked(contract)
 
         await self._event_bus.publish(Event(
             type=EventType.CONTRACT_SENT, firm_id=sender_id,
@@ -435,8 +590,38 @@ class GameEngine:
             timestamp=time.time(),
         ))
 
-        # Wake the recipient
+        if auto:
+            await self._event_bus.publish(Event(
+                type=EventType.CONTRACT_ACCEPTED, firm_id=sender_id,
+                data={
+                    "contract_id": auto["new_contract_id"],
+                    "auto_resolved_with": auto["existing_contract_id"],
+                    "buyer": auto["buyer"],
+                    "seller": auto["seller"],
+                    "commodity": auto["commodity"],
+                    "quantity": auto["quantity"],
+                    "total_price": auto["total_cost"],
+                },
+                timestamp=time.time(),
+            ))
+            # Wake both parties
+            self._notify_agent(auto["buyer"])
+            self._notify_agent(auto["seller"])
+
+            return (
+                f"auto-matched with existing contract! "
+                f"{auto['quantity']} {auto['commodity']} transferred from "
+                f"{auto['seller']} to {auto['buyer']} at "
+                f"${auto['trade_price']:.2f}/unit (${auto['total_cost']:.2f} total). "
+                f"Trade price averaged from ${auto['buyer_price']:.2f} bid "
+                f"and ${auto['seller_price']:.2f} ask."
+            )
+
+        # No auto-match, just a normal pending contract
         self._notify_agent(recipient_id)
+
+        # Schedule expiry
+        asyncio.create_task(self._expire_contract(str(contract.id)))
 
         action = "buy" if side == ContractSide.BUY else "sell"
         return (
@@ -452,7 +637,15 @@ class GameEngine:
             if contract.status != "pending":
                 return f"error: contract is already {contract.status}"
             if contract.recipient_id != firm_id:
-                return "error: this contract was not sent to you"
+                if contract.sender_id == firm_id:
+                    return (
+                        f"error: you sent this contract — only the recipient "
+                        f"({contract.recipient_id}) can accept it"
+                    )
+                return (
+                    f"error: this contract was sent to "
+                    f"{contract.recipient_id}, not to you"
+                )
 
             # Determine buyer and seller
             if contract.side == ContractSide.BUY:
@@ -468,12 +661,23 @@ class GameEngine:
             if buyer.cash < total_cost:
                 return (
                     f"error: buyer ({buyer_id}) has insufficient cash "
-                    f"(need ${total_cost:.2f}, have ${buyer.cash:.2f})"
+                    f"(need ${total_cost:.2f}, have ${buyer.cash:.2f}, "
+                    f"short ${total_cost - buyer.cash:.2f})"
                 )
             if seller.inventory[contract.commodity] < contract.quantity:
+                have = seller.inventory[contract.commodity]
+                short = contract.quantity - have
+                hint = (
+                    f" Try again when they have enough, "
+                    f"or send a smaller contract for {have} units."
+                    if have > 0
+                    else " The seller has none right now."
+                )
                 return (
-                    f"error: seller ({seller_id}) has insufficient {contract.commodity.value} "
-                    f"(need {contract.quantity}, have {seller.inventory[contract.commodity]})"
+                    f"error: seller ({seller_id}) has insufficient "
+                    f"{contract.commodity.value} "
+                    f"(need {contract.quantity}, have {have}, "
+                    f"short {short}).{hint}"
                 )
 
             # Execute atomic transfer
@@ -513,7 +717,15 @@ class GameEngine:
             if contract.status != "pending":
                 return f"error: contract is already {contract.status}"
             if contract.recipient_id != firm_id:
-                return "error: this contract was not sent to you"
+                if contract.sender_id == firm_id:
+                    return (
+                        f"error: you sent this contract — only the recipient "
+                        f"({contract.recipient_id}) can reject it"
+                    )
+                return (
+                    f"error: this contract was sent to "
+                    f"{contract.recipient_id}, not to you"
+                )
             contract.status = "rejected"
 
         await self._event_bus.publish(Event(
