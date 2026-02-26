@@ -1,5 +1,5 @@
 GAME_DURATION_SECONDS = 300  # 5 minutes
-FACTORY_PRODUCTION_SECONDS = 60  # 1 minute per production cycle
+FACTORY_PRODUCTION_SECONDS = 30  # 30 seconds per production cycle
 
 ORE_BUY_PRICE = 1.0
 CAR_SELL_PRICE = 10.0
