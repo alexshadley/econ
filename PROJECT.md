@@ -37,6 +37,20 @@ Factory units can be bought from the game for $10 each.
 Each agent starts with a firm that only has one type of factory (one for metal,
 one for parts, one for cars). 10 units of factory. $100 in the bank.
 
+## Implementation
+
+App will be a python script
+
+make sure to use uv for everything. so
+- `uv run python` to run code
+- `uv sync` to install deps
+- so on and so forth
+
+Use async to manage multiple llm-based agents running at the same time. Game
+will be real-time. Most actions are instant. But running factories takes 1 min,
+as I mentioned, during which the factory is busy and can't be used for another
+input
+
 ## Agents
 
 Agents will have tools for the following tasks:
