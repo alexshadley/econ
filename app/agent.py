@@ -24,14 +24,22 @@ class Agent:
         self._running = False
         self._tools = _get_tools_for_firm(firm_id)
 
-    async def run(self) -> None:
+    async def run(self, resumed: bool = False) -> None:
         self._running = True
+        if resumed:
+            start_msg = (
+                "This is a resumed game. You have 5 minutes. "
+                "Check your current state first — you may already have cash, inventory, and factories from the previous session. "
+                "Then start trading and producing."
+            )
+        else:
+            start_msg = (
+                "The game has started. You have 5 minutes. "
+                "Begin by checking your state, then start trading and producing."
+            )
         self.conversation_history = [
             {"role": "system", "content": build_system_prompt(self.firm_id)},
-            {
-                "role": "user",
-                "content": "The game has started. You have 5 minutes. Begin by checking your state, then start trading and producing.",
-            },
+            {"role": "user", "content": start_msg},
         ]
 
         while self._running and self.engine.game_running:
