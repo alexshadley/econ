@@ -18,9 +18,9 @@ from app.events import Event, EventType
 
 
 FIRM_STYLES = {
-    "firm_a": {"color": "bright_cyan", "tag": "A", "name": "Firm A", "role": "Metal Works"},
-    "firm_b": {"color": "#f5a623", "tag": "B", "name": "Firm B", "role": "Parts Factory"},
-    "firm_c": {"color": "#50fa7b", "tag": "C", "name": "Firm C", "role": "Car Assembly"},
+    "firm_a": {"color": "bright_cyan", "tag": "A", "name": "Firm A"},
+    "firm_b": {"color": "#f5a623", "tag": "B", "name": "Firm B"},
+    "firm_c": {"color": "#50fa7b", "tag": "C", "name": "Firm C"},
 }
 
 RANK_LABELS = ["1st", "2nd", "3rd"]
@@ -116,7 +116,7 @@ class GameDisplay:
             Layout(name="body"),
         )
         layout["body"].split_column(
-            Layout(name="firms", size=13),
+            Layout(name="firms", size=16),
             Layout(name="feed"),
         )
         layout["firms"].split_row(
@@ -205,18 +205,30 @@ class GameDisplay:
 
         lines.append(Text())
 
-        # Factory status
-        total = sum(facs.values())
+        # Factory breakdown by type
         active = sum(running.values())
-        fac = Text()
-        fac.append(" Factories  ", style="dim")
-        fac.append(str(active), style=f"bold {color}")
-        fac.append(f"/{total} running", style="dim")
-        lines.append(fac)
+        total = sum(facs.values())
+        fac_header = Text()
+        fac_header.append(" Factories  ", style="dim")
+        fac_header.append(str(active), style=f"bold {color}")
+        fac_header.append(f"/{total} running", style="dim")
+        lines.append(fac_header)
+        for ft in ["metal", "part", "car"]:
+            count = facs.get(ft, 0)
+            run_count = running.get(ft, 0)
+            ft_line = Text()
+            ft_line.append(f"   {ft:<6}", style="dim")
+            if count > 0:
+                ft_line.append(f" {count}", style="bold")
+                if run_count > 0:
+                    ft_line.append(f" ({run_count} running)", style="dim")
+            else:
+                ft_line.append(" ·", style="grey30")
+            lines.append(ft_line)
 
         return Panel(
             Group(*lines),
-            title=f"[bold {color}]{s['name']}[/] [{color}]{s['role']}[/]",
+            title=f"[bold {color}]{s['name']}[/]",
             border_style=color,
             padding=(0, 0),
         )
@@ -285,7 +297,7 @@ class GameDisplay:
 
         for i, r in enumerate(results):
             fid = r["firm_id"]
-            s = FIRM_STYLES.get(fid, {"color": "white", "name": fid, "role": "", "tag": "?"})
+            s = FIRM_STYLES.get(fid, {"color": "white", "name": fid, "tag": "?"})
             color = s["color"]
             rank_label = RANK_LABELS[i] if i < len(RANK_LABELS) else f"#{i + 1}"
             rank_style = RANK_STYLES[i] if i < len(RANK_STYLES) else "dim"
@@ -294,7 +306,6 @@ class GameDisplay:
             header = Text()
             header.append(f"     {rank_label}   ", style=rank_style)
             header.append(f"{s['name']}", style=f"bold {color}")
-            header.append(f"  {s['role']}", style=f"dim {color}")
             lines.append(header)
 
             # Cash bar
@@ -388,12 +399,12 @@ class GameDisplay:
         c.print()
         max_cash = max((r["cash"] for r in results), default=1) or 1
         for i, r in enumerate(results):
-            s = FIRM_STYLES.get(r["firm_id"], {"color": "white", "name": r["firm_id"], "role": ""})
+            s = FIRM_STYLES.get(r["firm_id"], {"color": "white", "name": r["firm_id"]})
             color = s["color"]
             rank = RANK_LABELS[i] if i < len(RANK_LABELS) else f"#{i + 1}"
             bar_len = int(20 * r["cash"] / max_cash)
             c.print(
-                f"  {rank}  [{color}]{s['name']} {s['role']}[/]  "
+                f"  {rank}  [{color}]{s['name']}[/]  "
                 f"[{color}]{'█' * bar_len}[/]  "
                 f"[bold]${r['cash']:,.2f}[/]"
             )
