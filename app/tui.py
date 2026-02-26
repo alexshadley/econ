@@ -2,8 +2,6 @@
 
 import asyncio
 import time
-from collections import deque
-from dataclasses import dataclass
 from datetime import datetime
 
 from rich.align import Align
@@ -14,7 +12,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from app.config import GAME_DURATION_SECONDS
-from app.events import Event, EventType
+from app.events import Event
 
 
 FIRM_STYLES = {
@@ -26,12 +24,11 @@ FIRM_STYLES = {
 RANK_LABELS = ["1st", "2nd", "3rd"]
 RANK_STYLES = ["bold bright_yellow", "bold white", "dim white"]
 
-
-@dataclass
-class FeedEntry:
-    timestamp: float
-    firm_id: str
-    message: str
+STATUS_STYLES = {
+    "pending": ("dim yellow", "?"),
+    "accepted": ("green", "~"),
+    "rejected": ("red", "x"),
+}
 
 
 class GameDisplay:
@@ -40,7 +37,6 @@ class GameDisplay:
     def __init__(self, engine) -> None:
         self._engine = engine
         self._console = Console()
-        self._feed: deque[FeedEntry] = deque(maxlen=300)
         self._live: Live | None = None
         self._game_over = False
         self._results: list[dict] | None = None
@@ -48,59 +44,8 @@ class GameDisplay:
     # --- Event handling ---
 
     async def handle_event(self, event: Event) -> None:
-        """EventBus subscriber — formats and stores events for the feed."""
-        msg = self._format_event(event)
-        if msg:
-            self._feed.append(FeedEntry(
-                timestamp=event.timestamp,
-                firm_id=event.firm_id or "game",
-                message=msg,
-            ))
-            self._refresh()
-
-    def _format_event(self, event: Event) -> str | None:
-        d = event.data
-        match event.type:
-            case EventType.FACTORY_STARTED:
-                return f"Started {d['count']} {d['factory_type']} factories (${d['cost']})"
-            case EventType.FACTORY_COMPLETED:
-                return f"+{d['count']} {d['output']} produced"
-            case EventType.CONTRACT_SENT:
-                to_style = FIRM_STYLES.get(d["to"], {})
-                to_name = to_style.get("name", d["to"]) if to_style else d["to"]
-                return (
-                    f"Offer to {to_name}: {d['side']} {d['quantity']} "
-                    f"{d['commodity']} @ ${d['price_per_unit']}/ea"
-                )
-            case EventType.CONTRACT_ACCEPTED:
-                s = FIRM_STYLES.get(d["seller"], {})
-                b = FIRM_STYLES.get(d["buyer"], {})
-                s_name = s.get("tag", "?") if s else "?"
-                b_name = b.get("tag", "?") if b else "?"
-                return (
-                    f"Trade: {d['quantity']} {d['commodity']} "
-                    f"({s_name} -> {b_name}) ${d['total_price']}"
-                )
-            case EventType.CONTRACT_REJECTED:
-                return "Contract rejected"
-            case EventType.MESSAGE_SENT:
-                to_style = FIRM_STYLES.get(d["to"], {})
-                to_name = to_style.get("name", d["to"]) if to_style else d["to"]
-                content = d.get("content", "")[:55]
-                return f"Msg to {to_name}: {content}"
-            case EventType.INVENTORY_CHANGED:
-                action = d.get("action")
-                if action == "buy_ore":
-                    return f"Bought {d['quantity']} ore"
-                elif action == "sell_cars":
-                    return f"Sold {d['quantity']} cars"
-                return None
-            case EventType.FACTORY_PURCHASED:
-                return f"Bought {d['quantity']} {d['factory_type']} factories"
-            case EventType.AGENT_ERROR:
-                return f"Error: {d.get('error', '?')[:50]}"
-            case _:
-                return None
+        """EventBus subscriber — refresh display on any event."""
+        self._refresh()
 
     # --- Layout: Game Screen ---
 
@@ -117,12 +62,17 @@ class GameDisplay:
         )
         layout["body"].split_column(
             Layout(name="firms", size=16),
-            Layout(name="feed"),
+            Layout(name="panes"),
         )
         layout["firms"].split_row(
             Layout(name="firm_a"),
             Layout(name="firm_b"),
             Layout(name="firm_c"),
+        )
+        layout["panes"].split_row(
+            Layout(name="contracts"),
+            Layout(name="messages"),
+            Layout(name="factory_runs"),
         )
 
         layout["header"].update(self._render_header())
@@ -132,7 +82,9 @@ class GameDisplay:
         for fid in ["firm_a", "firm_b", "firm_c"]:
             layout[fid].update(self._render_firm_card(fid, firms.get(fid, {})))
 
-        layout["feed"].update(self._render_feed())
+        layout["contracts"].update(self._render_contracts())
+        layout["messages"].update(self._render_messages())
+        layout["factory_runs"].update(self._render_factory_runs())
         return layout
 
     def _render_header(self) -> Panel:
@@ -233,33 +185,125 @@ class GameDisplay:
             padding=(0, 0),
         )
 
-    def _render_feed(self) -> Panel:
-        entries = list(self._feed)
-        # Show as many entries as fit in the available space
-        feed_height = max(5, self._console.height - 21)
-        visible = entries[-feed_height:]
+    def _render_contracts(self) -> Panel:
+        contracts = self._engine.get_contracts_snapshot()
+        pane_height = max(3, self._console.height - 21)
+        visible = contracts[:pane_height]
 
         if not visible:
-            content = Text(" Waiting for agents...", style="dim italic")
+            content = Text(" No contracts yet...", style="dim italic")
         else:
             lines: list[Text] = []
-            for entry in visible:
-                dt = datetime.fromtimestamp(entry.timestamp)
-                s = FIRM_STYLES.get(entry.firm_id)
-                color = s["color"] if s else "grey70"
-                tag = s["tag"] if s else "*"
+            for c in visible:
+                sender = c.get("sender_id", "?")
+                recipient = c.get("recipient_id", "?")
+                s_style = FIRM_STYLES.get(sender, {})
+                r_style = FIRM_STYLES.get(recipient, {})
+                s_tag = s_style.get("tag", "?") if s_style else "?"
+                r_tag = r_style.get("tag", "?") if r_style else "?"
+                s_color = s_style.get("color", "grey70") if s_style else "grey70"
+
+                status = c.get("status", "pending")
+                st_color, st_icon = STATUS_STYLES.get(status, ("dim", "?"))
+
+                commodity = c.get("commodity", "?")
+                qty = c.get("quantity", 0)
+                price = c.get("price_per_unit", 0)
+                side = c.get("side", "?")
 
                 line = Text()
-                line.append(f" {dt.strftime('%H:%M:%S')} ", style="grey50")
-                line.append(f" {tag} ", style=f"bold {color} on grey11")
-                line.append(f" {entry.message}", style="")
+                line.append(f" {st_icon} ", style=st_color)
+                line.append(f"{s_tag}", style=f"bold {s_color}")
+                line.append(f" {side} ", style="dim")
+                line.append(f"{qty} {commodity}", style="bold")
+                line.append(f" @${price:.2f}", style="dim")
+                line.append(f" -> {r_tag}", style="dim")
                 lines.append(line)
             content = Group(*lines)
 
         return Panel(
             content,
-            title="[bold]Live Feed[/]",
-            border_style="grey50",
+            title="[bold]Contracts[/]",
+            border_style="#c678dd",
+            padding=(0, 0),
+        )
+
+    def _render_messages(self) -> Panel:
+        messages = self._engine.get_messages_snapshot()
+        pane_height = max(3, self._console.height - 21)
+        visible = messages[:pane_height]
+
+        if not visible:
+            content = Text(" No messages yet...", style="dim italic")
+        else:
+            lines: list[Text] = []
+            for m in visible:
+                sender = m.get("from", "?")
+                recipient = m.get("to", "?")
+                s_style = FIRM_STYLES.get(sender, {})
+                r_style = FIRM_STYLES.get(recipient, {})
+                s_tag = s_style.get("tag", "?") if s_style else "?"
+                r_tag = r_style.get("tag", "?") if r_style else "?"
+                s_color = s_style.get("color", "grey70") if s_style else "grey70"
+
+                dt = datetime.fromtimestamp(m.get("timestamp", 0))
+                msg_content = m.get("content", "")[:45]
+
+                line = Text()
+                line.append(f" {dt.strftime('%H:%M:%S')} ", style="grey50")
+                line.append(f"{s_tag}", style=f"bold {s_color}")
+                line.append(f"->{r_tag} ", style="dim")
+                line.append(msg_content, style="")
+                lines.append(line)
+            content = Group(*lines)
+
+        return Panel(
+            content,
+            title="[bold]Messages[/]",
+            border_style="#61afef",
+            padding=(0, 0),
+        )
+
+    def _render_factory_runs(self) -> Panel:
+        jobs = self._engine.get_factory_jobs_snapshot()
+        pane_height = max(3, self._console.height - 21)
+        visible = jobs[:pane_height]
+
+        if not visible:
+            content = Text(" No active runs...", style="dim italic")
+        else:
+            lines: list[Text] = []
+            for j in visible:
+                firm_id = j.get("firm_id", "?")
+                f_style = FIRM_STYLES.get(firm_id, {})
+                f_tag = f_style.get("tag", "?") if f_style else "?"
+                f_color = f_style.get("color", "grey70") if f_style else "grey70"
+
+                factory_type = j.get("factory_type", "?")
+                count = j.get("count", 0)
+                secs_left = j.get("seconds_left", 0)
+
+                # Progress bar
+                total_duration = j.get("completes_at", 0) - j.get("started_at", 0)
+                elapsed = total_duration - secs_left
+                progress = elapsed / total_duration if total_duration > 0 else 0
+                progress = max(0.0, min(1.0, progress))
+                bar_width = 8
+                filled = int(bar_width * progress)
+                bar_str = "█" * filled + "░" * (bar_width - filled)
+
+                line = Text()
+                line.append(f" {f_tag} ", style=f"bold {f_color}")
+                line.append(f"{count}x {factory_type:<5} ", style="bold")
+                line.append(bar_str, style=f_color)
+                line.append(f" {secs_left:.0f}s", style="dim")
+                lines.append(line)
+            content = Group(*lines)
+
+        return Panel(
+            content,
+            title="[bold]Factory Runs[/]",
+            border_style="#e5c07b",
             padding=(0, 0),
         )
 
