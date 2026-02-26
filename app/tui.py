@@ -252,7 +252,7 @@ class GameDisplay:
                 s_color = s_style.get("color", "grey70") if s_style else "grey70"
 
                 dt = datetime.fromtimestamp(m.get("timestamp", 0))
-                msg_content = m.get("content", "")[:45]
+                msg_content = m.get("content", "")
 
                 line = Text()
                 line.append(f" {dt.strftime('%H:%M:%S')} ", style="grey50")
