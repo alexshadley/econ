@@ -5,7 +5,7 @@ import time
 
 from openai import AsyncOpenAI
 
-from app.config import OPENAI_MODEL
+from app.config import INPUT_PRICE_PER_TOKEN, OPENAI_MODEL, OUTPUT_PRICE_PER_TOKEN
 from app.engine import GameEngine
 from app.events import Event, EventBus, EventType
 from app.prompts import build_system_prompt
@@ -70,6 +70,13 @@ class Agent:
             tool_choice="auto",
             reasoning_effort="low",
         )
+
+        if response.usage:
+            cost = (
+                response.usage.prompt_tokens * INPUT_PRICE_PER_TOKEN
+                + response.usage.completion_tokens * OUTPUT_PRICE_PER_TOKEN
+            )
+            self.engine.total_api_cost += cost
 
         message = response.choices[0].message
 
