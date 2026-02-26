@@ -149,6 +149,43 @@ class GameEngine:
             "game_running": self.game_running,
         }
 
+    def get_contracts_snapshot(self) -> list[dict]:
+        """Return all contracts, most recent first."""
+        contracts = sorted(self._contracts.values(), key=lambda c: c.created_at, reverse=True)
+        return [c.model_dump(mode="json") for c in contracts]
+
+    def get_messages_snapshot(self) -> list[dict]:
+        """Return all messages, most recent first."""
+        msgs = sorted(self._messages, key=lambda m: m.timestamp, reverse=True)
+        return [
+            {
+                "id": str(m.id),
+                "from": m.sender_id,
+                "to": m.recipient_id,
+                "thread_id": m.thread_id,
+                "content": m.content,
+                "timestamp": m.timestamp,
+            }
+            for m in msgs
+        ]
+
+    def get_factory_jobs_snapshot(self) -> list[dict]:
+        """Return all active factory jobs, soonest completion first."""
+        now = time.time()
+        active = [j for j in self._factory_jobs if j.completes_at > now]
+        active.sort(key=lambda j: j.completes_at)
+        return [
+            {
+                "firm_id": j.firm_id,
+                "factory_type": j.factory_type.value,
+                "count": j.count,
+                "started_at": j.started_at,
+                "completes_at": j.completes_at,
+                "seconds_left": round(j.completes_at - now, 1),
+            }
+            for j in active
+        ]
+
     # --- Production cost ---
 
     def _production_cost_per_unit(self, n: int) -> float:
