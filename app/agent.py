@@ -68,7 +68,7 @@ class Agent:
             messages=self.conversation_history,
             tools=self._tools,
             tool_choice="auto",
-            reasoning_effort="low",
+            reasoning_effort="high",
         )
 
         if response.usage:
