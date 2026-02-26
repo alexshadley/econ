@@ -117,6 +117,10 @@ class Agent:
                     self.engine, self.firm_id, tool_name, arguments
                 )
 
+                self.engine.record_tool_call(
+                    self.firm_id, tool_name, arguments, result, time.time()
+                )
+
                 self.conversation_history.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,

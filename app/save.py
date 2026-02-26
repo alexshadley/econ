@@ -19,6 +19,7 @@ def save_game(engine, game_completed: bool) -> Path:
         "saved_at": datetime.now().isoformat(timespec="seconds"),
         "game_completed": game_completed,
         "firms": engine.to_save_dict(),
+        "tool_call_trace": engine.get_tool_call_trace_for_save(),
     }
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")

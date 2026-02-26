@@ -37,6 +37,7 @@ class GameEngine:
         self._game_running = False
         self._start_time: float = 0.0
         self.total_api_cost: float = 0.0
+        self._tool_call_log: list[dict] = []
 
         # Per-agent asyncio.Event for wait/notify
         self._agent_wake_events: dict[str, asyncio.Event] = {}
@@ -100,6 +101,19 @@ class GameEngine:
             }
         return result
 
+    def get_tool_call_trace_for_save(self) -> dict[str, list[dict]]:
+        """Return tool call trace grouped by firm for saving."""
+        trace: dict[str, list[dict]] = {}
+        for entry in self._tool_call_log:
+            fid = entry["firm_id"]
+            trace.setdefault(fid, []).append({
+                "tool": entry["tool"],
+                "args": entry["args"],
+                "result": entry["result"],
+                "timestamp": entry["timestamp"],
+            })
+        return trace
+
     def start_game(self) -> None:
         self._start_time = time.time()
         self._game_running = True
@@ -134,6 +148,29 @@ class GameEngine:
             return "interrupted: new activity for your firm"
         except asyncio.TimeoutError:
             return "wait completed (timeout)"
+
+    # --- Tool call tracking ---
+
+    def record_tool_call(
+        self, firm_id: str, tool_name: str, arguments: dict, result: str, timestamp: float
+    ) -> None:
+        self._tool_call_log.append({
+            "firm_id": firm_id,
+            "tool": tool_name,
+            "args": arguments,
+            "result": result,
+            "timestamp": timestamp,
+        })
+
+    def get_latest_tool_calls(self) -> dict[str, dict]:
+        """Return the most recent tool call for each firm."""
+        latest: dict[str, dict] = {}
+        for entry in self._tool_call_log:
+            latest[entry["firm_id"]] = entry
+        return latest
+
+    def get_tool_call_log(self) -> list[dict]:
+        return list(self._tool_call_log)
 
     # --- State snapshots ---
 

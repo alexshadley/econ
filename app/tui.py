@@ -62,7 +62,7 @@ class GameDisplay:
             Layout(name="body"),
         )
         layout["body"].split_column(
-            Layout(name="firms", size=16),
+            Layout(name="firms", size=18),
             Layout(name="panes"),
         )
         layout["firms"].split_row(
@@ -90,8 +90,12 @@ class GameDisplay:
             pending.setdefault(fid, {})
             pending[fid][output.value] = pending[fid].get(output.value, 0) + job["count"]
 
+        latest_tools = self._engine.get_latest_tool_calls()
+
         for fid in ["firm_a", "firm_b", "firm_c"]:
-            layout[fid].update(self._render_firm_card(fid, firms.get(fid, {}), pending.get(fid, {})))
+            layout[fid].update(self._render_firm_card(
+                fid, firms.get(fid, {}), pending.get(fid, {}), latest_tools.get(fid),
+            ))
 
         layout["contracts"].update(self._render_contracts())
         layout["messages"].update(self._render_messages())
@@ -140,7 +144,13 @@ class GameDisplay:
             padding=(0, 1),
         )
 
-    def _render_firm_card(self, firm_id: str, data: dict, pending: dict[str, int] | None = None) -> Panel:
+    def _render_firm_card(
+        self,
+        firm_id: str,
+        data: dict,
+        pending: dict[str, int] | None = None,
+        latest_tool: dict | None = None,
+    ) -> Panel:
         s = FIRM_STYLES[firm_id]
         color = s["color"]
         cash = data.get("cash", 0)
@@ -201,6 +211,20 @@ class GameDisplay:
                 ft_line.append(" ·", style="grey30")
             lines.append(ft_line)
 
+        # Latest tool call
+        lines.append(Text())
+        tool_line = Text()
+        if latest_tool:
+            tool_name = latest_tool["tool"]
+            args = latest_tool.get("args", {})
+            tool_line.append(f" > {tool_name}", style=f"bold {color}")
+            args_str = self._format_tool_args(tool_name, args)
+            if args_str:
+                tool_line.append(f" {args_str}", style="dim")
+        else:
+            tool_line.append(" > ...", style="dim italic")
+        lines.append(tool_line)
+
         return Panel(
             Group(*lines),
             title=f"[bold {color}]{s['name']}[/]",
@@ -208,9 +232,40 @@ class GameDisplay:
             padding=(0, 0),
         )
 
+    @staticmethod
+    def _format_tool_args(tool_name: str, args: dict) -> str:
+        """Return a compact summary of tool call arguments."""
+        if not args:
+            return ""
+        match tool_name:
+            case "buy_ore" | "sell_cars":
+                return f"{args.get('quantity', '?')}"
+            case "buy_factory":
+                return f"{args.get('quantity', '?')}x {args.get('factory_type', '?')}"
+            case "start_factories":
+                return f"{args.get('count', '?')}x {args.get('factory_type', '?')}"
+            case "send_message":
+                to = args.get("recipient_id", "?")
+                tag = FIRM_STYLES.get(to, {}).get("tag", "?")
+                return f"-> {tag}"
+            case "send_contract":
+                to = args.get("recipient_id", "?")
+                tag = FIRM_STYLES.get(to, {}).get("tag", "?")
+                side = args.get("side", "?")
+                qty = args.get("quantity", "?")
+                comm = args.get("commodity", "?")
+                return f"{side} {qty} {comm} -> {tag}"
+            case "accept_contract" | "reject_contract":
+                cid = args.get("contract_id", "?")
+                return f"{cid[:8]}..."
+            case "wait":
+                return f"{args.get('seconds', '?')}s"
+            case _:
+                return ""
+
     def _render_contracts(self) -> Panel:
         contracts = self._engine.get_contracts_snapshot()
-        pane_height = max(3, self._console.height - 21)
+        pane_height = max(3, self._console.height - 23)
         visible = contracts[:pane_height]
 
         if not visible:
@@ -253,7 +308,7 @@ class GameDisplay:
 
     def _render_messages(self) -> Panel:
         messages = self._engine.get_messages_snapshot()
-        pane_height = max(3, self._console.height - 21)
+        pane_height = max(3, self._console.height - 23)
         visible = messages[:pane_height]
 
         if not visible:
@@ -289,7 +344,7 @@ class GameDisplay:
 
     def _render_factory_runs(self) -> Panel:
         jobs = self._engine.get_factory_jobs_snapshot()
-        pane_height = max(3, self._console.height - 21)
+        pane_height = max(3, self._console.height - 23)
         visible = jobs[:pane_height]
 
         if not visible:
