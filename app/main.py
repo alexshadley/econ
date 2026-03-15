@@ -100,6 +100,7 @@ async def run_game(save_data: dict | None = None) -> None:
 
     agent_tasks = [asyncio.create_task(a.run(resumed=resumed)) for a in agents]
     refresh_task = asyncio.create_task(display.run_refresh_loop())
+    key_task = asyncio.create_task(display.run_key_listener())
 
     # Wait for either the game duration to elapse or a shutdown signal
     timer_task = asyncio.create_task(asyncio.sleep(GAME_DURATION_SECONDS))
@@ -119,7 +120,8 @@ async def run_game(save_data: dict | None = None) -> None:
     for t in agent_tasks:
         t.cancel()
     refresh_task.cancel()
-    await asyncio.gather(*agent_tasks, refresh_task, return_exceptions=True)
+    key_task.cancel()
+    await asyncio.gather(*agent_tasks, refresh_task, key_task, return_exceptions=True)
 
     engine.stop_game()
 
