@@ -20,6 +20,7 @@ def save_game(engine, game_completed: bool) -> Path:
         "game_completed": game_completed,
         "firms": engine.to_save_dict(),
         "tool_call_trace": engine.get_tool_call_trace_for_save(),
+        "reasoning_trace": engine.get_reasoning_trace_for_save(),
     }
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")

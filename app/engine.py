@@ -39,6 +39,7 @@ class GameEngine:
         self._start_time: float = 0.0
         self.total_api_cost: float = 0.0
         self._tool_call_log: list[dict] = []
+        self._reasoning_log: list[dict] = []
 
         # Per-agent asyncio.Event for wait/notify
         self._agent_wake_events: dict[str, asyncio.Event] = {}
@@ -113,6 +114,50 @@ class GameEngine:
                 "result": entry["result"],
                 "timestamp": entry["timestamp"],
             })
+        return trace
+
+    # --- Reasoning summary tracking ---
+
+    def record_reasoning_summary(
+        self, firm_id: str, summary: str, timestamp: float
+    ) -> None:
+        self._reasoning_log.append({
+            "firm_id": firm_id,
+            "summary": summary,
+            "timestamp": timestamp,
+        })
+
+    def get_reasoning_trace_for_save(self) -> dict[str, list[dict]]:
+        """Return reasoning summaries grouped by firm for saving."""
+        trace: dict[str, list[dict]] = {}
+        for entry in self._reasoning_log:
+            fid = entry["firm_id"]
+            trace.setdefault(fid, []).append({
+                "summary": entry["summary"],
+                "timestamp": entry["timestamp"],
+            })
+        return trace
+
+    def get_full_trace(self) -> dict[str, list[dict]]:
+        """Return merged reasoning + tool call trace per firm, sorted by time."""
+        trace: dict[str, list[dict]] = {}
+        for entry in self._reasoning_log:
+            fid = entry["firm_id"]
+            trace.setdefault(fid, []).append({
+                "type": "reasoning",
+                "summary": entry["summary"],
+                "timestamp": entry["timestamp"],
+            })
+        for entry in self._tool_call_log:
+            fid = entry["firm_id"]
+            trace.setdefault(fid, []).append({
+                "type": "tool_call",
+                "tool": entry["tool"],
+                "args": entry["args"],
+                "timestamp": entry["timestamp"],
+            })
+        for fid in trace:
+            trace[fid].sort(key=lambda e: e["timestamp"])
         return trace
 
     def start_game(self) -> None:

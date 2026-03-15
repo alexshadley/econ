@@ -69,6 +69,7 @@ class Agent:
             tools=self._tools,
             tool_choice="auto",
             reasoning_effort="high",
+            reasoning={"summary": "auto"},
         )
 
         if response.usage:
@@ -79,6 +80,13 @@ class Agent:
             self.engine.total_api_cost += cost
 
         message = response.choices[0].message
+
+        # Record reasoning summary if present
+        reasoning_content = getattr(message, "reasoning_content", None)
+        if reasoning_content:
+            self.engine.record_reasoning_summary(
+                self.firm_id, reasoning_content, time.time()
+            )
 
         # Append assistant message to history
         msg_dict: dict = {"role": "assistant"}

@@ -1,7 +1,11 @@
 """Beautiful terminal UI for the Daegu Economy Simulator."""
 
 import asyncio
+import os
+import sys
+import termios
 import time
+import tty
 from datetime import datetime
 
 from rich.align import Align
@@ -14,6 +18,8 @@ from rich.text import Text
 from app.config import GAME_DURATION_SECONDS
 from app.events import Event
 from app.models import FACTORY_IO, FactoryType
+
+TAB_NAMES = ["Game", "Traces"]
 
 
 FIRM_STYLES = {
@@ -41,6 +47,8 @@ class GameDisplay:
         self._live: Live | None = None
         self._game_over = False
         self._results: list[dict] | None = None
+        self._current_tab: int = 0
+        self._old_termios = None
 
     # --- Event handling ---
 
@@ -53,12 +61,14 @@ class GameDisplay:
     def _render(self) -> Layout:
         if self._game_over and self._results:
             return self._render_results_screen()
+        if self._current_tab == 1:
+            return self._render_traces_screen()
         return self._render_game_screen()
 
     def _render_game_screen(self) -> Layout:
         layout = Layout()
         layout.split_column(
-            Layout(name="header", size=6),
+            Layout(name="header", size=7),
             Layout(name="body"),
         )
         layout["body"].split_column(
@@ -102,6 +112,17 @@ class GameDisplay:
         layout["factory_runs"].update(self._render_factory_runs())
         return layout
 
+    def _render_tab_bar(self) -> Text:
+        bar = Text()
+        for i, name in enumerate(TAB_NAMES):
+            if i == self._current_tab:
+                bar.append(f" [{name}] ", style="bold bright_white on grey23")
+            else:
+                bar.append(f"  {name}  ", style="dim")
+        bar.append("  ", style="")
+        bar.append("tab to switch", style="dim italic")
+        return bar
+
     def _render_header(self) -> Panel:
         remaining = self._engine.time_remaining()
         elapsed = GAME_DURATION_SECONDS - remaining
@@ -139,7 +160,7 @@ class GameDisplay:
         cost_line.append(f"${api_cost:.4f}", style="bold bright_yellow")
 
         return Panel(
-            Group(Align.center(title), Align.center(chain), Align.center(bar), Align.center(cost_line)),
+            Group(self._render_tab_bar(), Align.center(title), Align.center(chain), Align.center(bar), Align.center(cost_line)),
             border_style="bright_cyan",
             padding=(0, 1),
         )
@@ -385,6 +406,73 @@ class GameDisplay:
             padding=(0, 0),
         )
 
+    # --- Layout: Traces Screen ---
+
+    def _render_traces_screen(self) -> Layout:
+        layout = Layout()
+        layout.split_column(
+            Layout(name="header", size=7),
+            Layout(name="traces"),
+        )
+        layout["header"].update(self._render_header())
+        layout["traces"].split_row(
+            Layout(name="firm_a"),
+            Layout(name="firm_b"),
+            Layout(name="firm_c"),
+        )
+
+        full_trace = self._engine.get_full_trace()
+        # Estimate visible lines from console height minus header
+        visible_lines = max(5, self._console.height - 10)
+
+        for fid in ["firm_a", "firm_b", "firm_c"]:
+            entries = full_trace.get(fid, [])
+            layout[fid].update(self._render_trace_column(fid, entries, visible_lines))
+
+        return layout
+
+    def _render_trace_column(
+        self, firm_id: str, entries: list[dict], max_lines: int
+    ) -> Panel:
+        s = FIRM_STYLES[firm_id]
+        color = s["color"]
+
+        if not entries:
+            content = Text(" Waiting...", style="dim italic")
+            return Panel(
+                content,
+                title=f"[bold {color}]{s['name']}[/]",
+                border_style=color,
+                padding=(0, 0),
+            )
+
+        # Show most recent entries that fit
+        visible = entries[-max_lines:]
+        lines: list[Text] = []
+
+        for entry in visible:
+            line = Text(overflow="ellipsis", no_wrap=True)
+            if entry["type"] == "reasoning":
+                summary = entry["summary"].replace("\n", " ")
+                line.append(" R: ", style=f"bold {color}")
+                line.append(summary, style="italic")
+            else:
+                tool = entry["tool"]
+                args = entry.get("args", {})
+                line.append(" > ", style=f"bold {color}")
+                line.append(tool, style="bold")
+                args_str = self._format_tool_args(tool, args)
+                if args_str:
+                    line.append(f" {args_str}", style="dim")
+            lines.append(line)
+
+        return Panel(
+            Group(*lines),
+            title=f"[bold {color}]{s['name']}[/]",
+            border_style=color,
+            padding=(0, 0),
+        )
+
     # --- Layout: Results Screen ---
 
     def _render_results_screen(self) -> Layout:
@@ -498,6 +586,32 @@ class GameDisplay:
                 await asyncio.sleep(0.5)
         except asyncio.CancelledError:
             pass
+
+    async def run_key_listener(self) -> None:
+        """Listen for Tab key to switch between tabs."""
+        fd = sys.stdin.fileno()
+        self._old_termios = termios.tcgetattr(fd)
+        try:
+            tty.setcbreak(fd)
+            loop = asyncio.get_event_loop()
+
+            def _on_stdin_ready() -> None:
+                ch = os.read(fd, 1)
+                if ch == b"\t":
+                    self._current_tab = (self._current_tab + 1) % len(TAB_NAMES)
+                    self._refresh()
+
+            loop.add_reader(fd, _on_stdin_ready)
+            try:
+                while not self._game_over:
+                    await asyncio.sleep(0.5)
+            except asyncio.CancelledError:
+                pass
+            finally:
+                loop.remove_reader(fd)
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, self._old_termios)
+            self._old_termios = None
 
     def show_results(self, results: list[dict]) -> None:
         """Switch display to the results scoreboard."""
