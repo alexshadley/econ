@@ -2,7 +2,10 @@ import asyncio
 import logging
 import os
 import signal
+import sys
+import termios
 import time
+import tty
 from pathlib import Path
 
 # Load .env file
@@ -28,6 +31,42 @@ from app.tui import GameDisplay
 logging.basicConfig(level=logging.WARNING)
 
 
+def _read_key() -> str:
+    """Read a single keypress. Returns 'up', 'down', 'enter', or the character."""
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ch = sys.stdin.read(1)
+        if ch == "\r" or ch == "\n":
+            return "enter"
+        if ch == "\x1b":
+            seq = sys.stdin.read(2)
+            if seq == "[A":
+                return "up"
+            if seq == "[B":
+                return "down"
+            return "escape"
+        return ch
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+
+def _render_menu(console: Console, options: list[str], selected: int) -> None:
+    """Clear screen and render the menu with the selected item highlighted."""
+    console.clear()
+    console.print()
+    console.print("[bold bright_cyan]D A E G U[/]  [dim]Economy Simulator[/]")
+    console.print()
+    for i, label in enumerate(options):
+        if i == selected:
+            console.print(f"  [bold bright_white on blue] > {label} [/]")
+        else:
+            console.print(f"    {label}")
+    console.print()
+    console.print("[dim]↑/↓ to navigate, Enter to select[/]")
+
+
 def prompt_startup() -> dict | None:
     """Show startup menu. Returns save data dict to resume, or None for new game."""
     console = Console()
@@ -36,34 +75,31 @@ def prompt_startup() -> dict | None:
     if not saves:
         return None
 
-    console.print()
-    console.print("[bold bright_cyan]D A E G U[/]  [dim]Economy Simulator[/]")
-    console.print()
-    console.print("[bold]Saved games:[/]")
-    for i, s in enumerate(saves, 1):
+    # Build option labels: "New game" first, then saved games
+    options: list[str] = ["New game"]
+    for s in saves:
         status = "completed" if s["game_completed"] else "in progress"
         cash_parts = [f"{fid}: {cash}" for fid, cash in s["cash_summary"].items()]
         cash_str = ", ".join(cash_parts)
-        console.print(
-            f"  [bold]{i}[/]) {s['saved_at']}  "
-            f"[dim]({status})[/]  {cash_str}"
-        )
-    console.print(f"  [bold]{len(saves) + 1}[/]) New game")
-    console.print()
+        options.append(f"{s['saved_at']}  ({status})  {cash_str}")
+
+    selected = 0
+    _render_menu(console, options, selected)
 
     while True:
-        choice = console.input("[bold]Choose an option: [/]").strip()
-        try:
-            idx = int(choice)
-        except ValueError:
-            console.print("[red]Enter a number.[/]")
-            continue
-        if idx == len(saves) + 1:
-            return None
-        if 1 <= idx <= len(saves):
-            save_path = saves[idx - 1]["path"]
+        key = _read_key()
+        if key == "up":
+            selected = (selected - 1) % len(options)
+            _render_menu(console, options, selected)
+        elif key == "down":
+            selected = (selected + 1) % len(options)
+            _render_menu(console, options, selected)
+        elif key == "enter":
+            console.clear()
+            if selected == 0:
+                return None
+            save_path = saves[selected - 1]["path"]
             return load_save(save_path)
-        console.print("[red]Invalid choice.[/]")
 
 
 async def run_game(save_data: dict | None = None) -> None:
