@@ -11,9 +11,6 @@ def save_game(engine, game_completed: bool) -> Path:
     """Serialize current game state to a JSON file in .saves/."""
     SAVES_DIR.mkdir(exist_ok=True)
 
-    # Finalize any in-progress factory jobs before saving
-    engine.finalize_factory_jobs()
-
     save_data = {
         "version": 1,
         "saved_at": datetime.now().isoformat(timespec="seconds"),
