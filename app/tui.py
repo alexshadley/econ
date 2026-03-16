@@ -462,12 +462,12 @@ class GameDisplay:
         lines: list[Text] = []
 
         for entry in visible:
-            line = Text(overflow="ellipsis", no_wrap=True)
             if entry["type"] == "reasoning":
-                summary = entry["summary"].replace("\n", " ")
+                line = Text(overflow="fold")
                 line.append(" R: ", style=f"bold {color}")
-                line.append(summary, style="italic")
+                line.append(entry["summary"], style="italic")
             else:
+                line = Text(overflow="ellipsis", no_wrap=True)
                 tool = entry["tool"]
                 args = entry.get("args", {})
                 line.append(" > ", style=f"bold {color}")
