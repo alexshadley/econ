@@ -460,13 +460,13 @@ class GameDisplay:
         # Build all lines per firm, then slice by scroll offset
         total_lines = sum(bucket_heights)
 
-        # Clamp scroll offset so we don't scroll past the top
+        # Clamp scroll offset so we don't scroll past the bottom
         max_offset = max(0, total_lines - visible_lines)
         self._trace_scroll_offset = min(self._trace_scroll_offset, max_offset)
 
-        # Line window: scroll_offset=0 means pinned to bottom
-        end_line = total_lines - self._trace_scroll_offset
-        start_line = max(0, end_line - visible_lines)
+        # Line window: scroll_offset=0 means top of content (no auto-scroll)
+        start_line = self._trace_scroll_offset
+        end_line = min(total_lines, start_line + visible_lines)
 
         for fid in ["firm_a", "firm_b", "firm_c"]:
             all_lines = self._build_trace_lines(
@@ -518,11 +518,21 @@ class GameDisplay:
             entry_lines = 0
             for entry in entries:
                 if entry["type"] == "reasoning":
-                    line = Text(overflow="fold")
-                    line.append(" R: ", style=f"bold {color}")
-                    line.append(entry["summary"], style="italic")
-                    text_len = len(" R: ") + len(entry["summary"])
-                    entry_lines += max(1, (text_len + col_width - 1) // col_width)
+                    # Manually wrap reasoning text so each Text is exactly
+                    # one visual line, keeping columns aligned.
+                    prefix = " R: "
+                    full_text = prefix + entry["summary"]
+                    n_lines = max(1, (len(full_text) + col_width - 1) // col_width)
+                    for li in range(n_lines):
+                        chunk = full_text[li * col_width : (li + 1) * col_width]
+                        line = Text(overflow="ellipsis", no_wrap=True)
+                        if li == 0:
+                            line.append(prefix, style=f"bold {color}")
+                            line.append(chunk[len(prefix):], style="italic")
+                        else:
+                            line.append(chunk, style="italic")
+                        lines.append(line)
+                    entry_lines += n_lines
                 else:
                     line = Text(overflow="ellipsis", no_wrap=True)
                     tool = entry["tool"]
@@ -533,7 +543,7 @@ class GameDisplay:
                     if args_str:
                         line.append(f" {args_str}", style="dim")
                     entry_lines += 1
-                lines.append(line)
+                    lines.append(line)
 
             # Pad with blank lines so all columns have the same height per bucket
             expected_entry_lines = bucket_heights[i] - 1  # minus header
@@ -701,11 +711,11 @@ class GameDisplay:
                 if ch == b"\x1b":
                     # Read escape sequence for arrow keys
                     seq = os.read(fd, 2)
-                    if seq == b"[A":  # Up arrow
-                        self._trace_scroll_offset += 1
-                        self._refresh()
-                    elif seq == b"[B":  # Down arrow
+                    if seq == b"[A":  # Up arrow – scroll up
                         self._trace_scroll_offset = max(0, self._trace_scroll_offset - 1)
+                        self._refresh()
+                    elif seq == b"[B":  # Down arrow – scroll down
+                        self._trace_scroll_offset += 1
                         self._refresh()
                 elif ch == b"\t":
                     self._current_tab = (self._current_tab + 1) % len(TAB_NAMES)
