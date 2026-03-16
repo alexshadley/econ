@@ -49,6 +49,7 @@ class GameDisplay:
         self._current_tab: int = 0
         self._old_termios = None
         self._debug_mode = False
+        self._trace_scroll_offset = 0  # 0 = pinned to bottom
 
     # --- Layout: Game Screen ---
 
@@ -117,6 +118,9 @@ class GameDisplay:
                 bar.append(f"  {name}  ", style="dim")
         bar.append("  ", style="")
         bar.append("tab to switch", style="dim italic")
+        if self._current_tab == 1:
+            bar.append("  |  ", style="dim")
+            bar.append("↑↓ scroll", style="dim italic")
         return bar
 
     def _render_header(self) -> Panel:
@@ -418,68 +422,127 @@ class GameDisplay:
         )
 
         full_trace = self._engine.get_full_trace()
-        # Estimate visible lines from console height minus header
+        start_time = self._engine._start_time or time.time()
         visible_lines = max(5, self._console.height - 10)
+        col_width = max(20, (self._console.width // 3) - 4)
+
+        # Build time buckets (30s each) per firm
+        bucket_size = 30
+        all_bucket_keys: set[int] = set()
+        firm_buckets: dict[str, dict[int, list[dict]]] = {}
+        for fid in ["firm_a", "firm_b", "firm_c"]:
+            firm_buckets[fid] = {}
+            for entry in full_trace.get(fid, []):
+                elapsed = entry["timestamp"] - start_time
+                bk = int(elapsed // bucket_size) * bucket_size
+                all_bucket_keys.add(bk)
+                firm_buckets[fid].setdefault(bk, []).append(entry)
+
+        sorted_bucket_keys = sorted(all_bucket_keys)
+
+        # For each bucket, compute max visual height across all 3 firms
+        # so columns stay aligned. Each bucket = 1 header line + entry lines.
+        def _entry_visual_lines(entry: dict) -> int:
+            if entry["type"] == "reasoning":
+                text_len = len(" R: ") + len(entry["summary"])
+                return max(1, (text_len + col_width - 1) // col_width)
+            return 1
+
+        bucket_heights: list[int] = []
+        for bk in sorted_bucket_keys:
+            max_h = 0
+            for fid in ["firm_a", "firm_b", "firm_c"]:
+                entries = firm_buckets[fid].get(bk, [])
+                h = sum(_entry_visual_lines(e) for e in entries)
+                max_h = max(max_h, h)
+            bucket_heights.append(1 + max_h)  # +1 for timestamp header
+
+        # Apply scroll offset from the bottom (in buckets)
+        end_bucket = len(sorted_bucket_keys)
+        skipped = 0
+        if self._trace_scroll_offset > 0:
+            for i in range(len(sorted_bucket_keys) - 1, -1, -1):
+                bh = bucket_heights[i]
+                if skipped + bh > self._trace_scroll_offset:
+                    break
+                skipped += bh
+                end_bucket = i
+
+        # Select buckets that fit in the viewport
+        total = 0
+        start_bucket = end_bucket
+        for i in range(end_bucket - 1, -1, -1):
+            bh = bucket_heights[i]
+            if total + bh > visible_lines:
+                break
+            total += bh
+            start_bucket = i
+
+        visible_bucket_keys = sorted_bucket_keys[start_bucket:end_bucket]
 
         for fid in ["firm_a", "firm_b", "firm_c"]:
-            entries = full_trace.get(fid, [])
-            layout[fid].update(self._render_trace_column(fid, entries, visible_lines))
+            layout[fid].update(self._render_trace_column(
+                fid, firm_buckets[fid], visible_bucket_keys, bucket_size,
+                bucket_heights[start_bucket:end_bucket], col_width,
+            ))
 
         return layout
 
     def _render_trace_column(
-        self, firm_id: str, entries: list[dict], max_lines: int
+        self,
+        firm_id: str,
+        buckets: dict[int, list[dict]],
+        visible_bucket_keys: list[int],
+        bucket_size: int,
+        bucket_heights: list[int],
+        col_width: int,
     ) -> Panel:
         s = FIRM_STYLES[firm_id]
         color = s["color"]
 
-        if not entries:
-            content = Text(" Waiting...", style="dim italic")
+        if not visible_bucket_keys:
             return Panel(
-                content,
+                Text(" Waiting...", style="dim italic"),
                 title=f"[bold {color}]{s['name']}[/]",
                 border_style=color,
                 padding=(0, 0),
             )
 
-        # Build all lines, then show the tail that fits
         lines: list[Text] = []
+        for i, bk in enumerate(visible_bucket_keys):
+            # Timestamp header
+            mins, secs = divmod(bk, 60)
+            header = Text()
+            header.append(f" {mins}:{secs:02d} ", style="bold dim")
+            header.append("─" * max(0, col_width - 8), style="grey30")
+            lines.append(header)
 
-        for entry in entries:
-            if entry["type"] == "reasoning":
-                line = Text(overflow="fold")
-                line.append(" R: ", style=f"bold {color}")
-                line.append(entry["summary"], style="italic")
-            else:
-                line = Text(overflow="ellipsis", no_wrap=True)
-                tool = entry["tool"]
-                args = entry.get("args", {})
-                line.append(" > ", style=f"bold {color}")
-                line.append(tool, style="bold")
-                args_str = self._format_tool_args(tool, args)
-                if args_str:
-                    line.append(f" {args_str}", style="dim")
-            lines.append(line)
+            entries = buckets.get(bk, [])
+            entry_lines = 0
+            for entry in entries:
+                if entry["type"] == "reasoning":
+                    line = Text(overflow="fold")
+                    line.append(" R: ", style=f"bold {color}")
+                    line.append(entry["summary"], style="italic")
+                    text_len = len(" R: ") + len(entry["summary"])
+                    entry_lines += max(1, (text_len + col_width - 1) // col_width)
+                else:
+                    line = Text(overflow="ellipsis", no_wrap=True)
+                    tool = entry["tool"]
+                    args = entry.get("args", {})
+                    line.append(" > ", style=f"bold {color}")
+                    line.append(tool, style="bold")
+                    args_str = self._format_tool_args(tool, args)
+                    if args_str:
+                        line.append(f" {args_str}", style="dim")
+                    entry_lines += 1
+                lines.append(line)
 
-        # Keep only tail entries that fit within the available height.
-        # Reasoning entries with fold overflow may wrap, so estimate their
-        # actual line count based on the column width (~1/3 of console).
-        col_width = max(20, (self._console.width // 3) - 4)  # minus panel border
-        total_visual = 0
-        start_idx = len(lines)
-        for i in range(len(lines) - 1, -1, -1):
-            entry = entries[i]
-            if entry["type"] == "reasoning":
-                # Estimate wrapped lines for reasoning text
-                text_len = len(" R: ") + len(entry["summary"])
-                visual_lines = max(1, (text_len + col_width - 1) // col_width)
-            else:
-                visual_lines = 1
-            if total_visual + visual_lines > max_lines:
-                break
-            total_visual += visual_lines
-            start_idx = i
-        lines = lines[start_idx:]
+            # Pad with blank lines so all columns have the same height per bucket
+            expected_entry_lines = bucket_heights[i] - 1  # minus header
+            pad = expected_entry_lines - entry_lines
+            for _ in range(pad):
+                lines.append(Text(""))
 
         return Panel(
             Group(*lines),
@@ -643,7 +706,16 @@ class GameDisplay:
 
             def _on_stdin_ready() -> None:
                 ch = os.read(fd, 1)
-                if ch == b"\t":
+                if ch == b"\x1b":
+                    # Read escape sequence for arrow keys
+                    seq = os.read(fd, 2)
+                    if seq == b"[A":  # Up arrow
+                        self._trace_scroll_offset += 3
+                        self._refresh()
+                    elif seq == b"[B":  # Down arrow
+                        self._trace_scroll_offset = max(0, self._trace_scroll_offset - 3)
+                        self._refresh()
+                elif ch == b"\t":
                     self._current_tab = (self._current_tab + 1) % len(TAB_NAMES)
                     self._refresh()
                 elif ch == b"d" or ch == b"D":
