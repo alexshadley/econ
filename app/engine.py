@@ -60,11 +60,16 @@ class GameEngine:
             factories = {ft: 0 for ft in FactoryType}
             factories[factory_type] = STARTING_FACTORY_COUNT
 
+            _, output_commodity = FACTORY_IO[factory_type]
+            inventory = {c: 0 for c in Commodity}
+            if factory_type in (FactoryType.METAL, FactoryType.PART):
+                inventory[output_commodity] = 10
+
             self._firms[firm_id] = Firm(
                 id=firm_id,
                 name=cfg["name"],
                 cash=STARTING_CASH,
-                inventory={c: 0 for c in Commodity},
+                inventory=inventory,
                 factories=factories,
                 running_factories={ft: 0 for ft in FactoryType},
             )
