@@ -32,7 +32,7 @@ YOUR STARTING POSITION:
 
 THE ECONOMY:
 - Supply chain: ore -> metal -> parts -> cars
-- Three factory types convert one commodity to the next (1 input : 1 output, takes 60 seconds)
+- Three factory types convert one commodity to the next (1 input : 1 output, takes 30 seconds)
 - Ore can be bought from the market for $1/unit
 - Cars can be sold to the market for $10/unit
 - Metal and parts can ONLY be traded between firms via contracts
