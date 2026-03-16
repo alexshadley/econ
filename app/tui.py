@@ -19,7 +19,7 @@ from app.config import GAME_DURATION_SECONDS
 from app.events import Event
 from app.models import FACTORY_IO, FactoryType
 
-TAB_NAMES = ["Game", "Traces", "Debug"]
+TAB_NAMES = ["Game", "Traces"]
 
 
 FIRM_STYLES = {
@@ -50,6 +50,7 @@ class GameDisplay:
         self._current_tab: int = 0
         self._old_termios = None
         self._debug_log: list[str] = []
+        self._debug_mode = False
 
     # --- Event handling ---
 
@@ -69,10 +70,10 @@ class GameDisplay:
     def _render(self) -> Layout:
         if self._game_over and self._results:
             return self._render_results_screen()
+        if self._debug_mode:
+            return self._render_debug_screen()
         if self._current_tab == 1:
             return self._render_traces_screen()
-        if self._current_tab == 2:
-            return self._render_debug_screen()
         return self._render_game_screen()
 
     def _render_game_screen(self) -> Layout:
@@ -130,7 +131,7 @@ class GameDisplay:
             else:
                 bar.append(f"  {name}  ", style="dim")
         bar.append("  ", style="")
-        bar.append("tab to switch · d for debug", style="dim italic")
+        bar.append("tab to switch", style="dim italic")
         return bar
 
     def _render_header(self) -> Panel:
@@ -642,7 +643,7 @@ class GameDisplay:
                     self._current_tab = (self._current_tab + 1) % len(TAB_NAMES)
                     self._refresh()
                 elif ch == b"d" or ch == b"D":
-                    self._current_tab = 2  # Debug tab
+                    self._debug_mode = not self._debug_mode
                     self._refresh()
 
             loop.add_reader(fd, _on_stdin_ready)
