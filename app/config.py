@@ -1,7 +1,5 @@
 GAME_DURATION_SECONDS = 300  # 5 minutes
 FACTORY_PRODUCTION_SECONDS = 30  # 30 seconds per production cycle
-CONTRACT_EXPIRY_SECONDS = 60  # contracts expire after 1 minute
-
 ORE_BUY_PRICE = 1.0
 CAR_SELL_PRICE = 10.0
 FACTORY_BUY_PRICE = 10.0

@@ -6,8 +6,6 @@ import sys
 import termios
 import time
 import tty
-from datetime import datetime
-
 from rich.align import Align
 from rich.console import Console, Group
 from rich.layout import Layout
@@ -29,12 +27,6 @@ FIRM_STYLES = {
 
 RANK_LABELS = ["1st", "2nd", "3rd"]
 RANK_STYLES = ["bold bright_yellow", "bold white", "dim white"]
-
-STATUS_STYLES = {
-    "pending": ("dim yellow", "?"),
-    "accepted": ("green", "~"),
-    "rejected": ("red", "x"),
-}
 
 
 class GameDisplay:
@@ -78,8 +70,7 @@ class GameDisplay:
             Layout(name="firm_c"),
         )
         layout["panes"].split_row(
-            Layout(name="contracts"),
-            Layout(name="messages"),
+            Layout(name="order_book"),
             Layout(name="factory_runs"),
         )
 
@@ -104,8 +95,7 @@ class GameDisplay:
                 fid, firms.get(fid, {}), pending.get(fid, {}), latest_tools.get(fid),
             ))
 
-        layout["contracts"].update(self._render_contracts())
-        layout["messages"].update(self._render_messages())
+        layout["order_book"].update(self._render_order_book())
         layout["factory_runs"].update(self._render_factory_runs())
         return layout
 
@@ -265,101 +255,55 @@ class GameDisplay:
                 return f"{args.get('quantity', '?')}x {args.get('factory_type', '?')}"
             case "start_factories":
                 return f"{args.get('count', '?')}x {args.get('factory_type', '?')}"
-            case "send_message":
-                to = args.get("recipient_id", "?")
-                tag = FIRM_STYLES.get(to, {}).get("tag", "?")
-                return f"-> {tag}"
-            case "send_contract":
-                to = args.get("recipient_id", "?")
-                tag = FIRM_STYLES.get(to, {}).get("tag", "?")
-                side = args.get("side", "?")
+            case "post_buy_order" | "post_sell_order":
                 qty = args.get("quantity", "?")
                 comm = args.get("commodity", "?")
-                return f"{side} {qty} {comm} -> {tag}"
-            case "accept_contract" | "reject_contract":
-                cid = args.get("contract_id", "?")
-                return f"{cid[:8]}..."
+                price = args.get("price_per_unit", "?")
+                return f"{qty} {comm} @${price}"
+            case "cancel_order":
+                oid = args.get("order_id", "?")
+                return f"{oid[:8]}..."
             case "wait":
                 return f"{args.get('seconds', '?')}s"
             case _:
                 return ""
 
-    def _render_contracts(self) -> Panel:
-        contracts = self._engine.get_contracts_snapshot()
+    def _render_order_book(self) -> Panel:
+        orders = self._engine.get_orders_snapshot()
         pane_height = max(3, self._console.height - 23)
-        visible = contracts[:pane_height]
+        # Show only open orders
+        open_orders = [o for o in orders if o.get("status") == "open"]
+        visible = open_orders[:pane_height]
 
         if not visible:
-            content = Text(" No contracts yet...", style="dim italic")
+            content = Text(" No open orders...", style="dim italic")
         else:
             lines: list[Text] = []
-            for c in visible:
-                sender = c.get("sender_id", "?")
-                recipient = c.get("recipient_id", "?")
-                s_style = FIRM_STYLES.get(sender, {})
-                r_style = FIRM_STYLES.get(recipient, {})
-                s_tag = s_style.get("tag", "?") if s_style else "?"
-                r_tag = r_style.get("tag", "?") if r_style else "?"
-                s_color = s_style.get("color", "grey70") if s_style else "grey70"
+            for o in visible:
+                firm_id = o.get("firm_id", "?")
+                f_style = FIRM_STYLES.get(firm_id, {})
+                f_tag = f_style.get("tag", "?") if f_style else "?"
+                f_color = f_style.get("color", "grey70") if f_style else "grey70"
 
-                status = c.get("status", "pending")
-                st_color, st_icon = STATUS_STYLES.get(status, ("dim", "?"))
+                side = o.get("side", "?")
+                commodity = o.get("commodity", "?")
+                qty = o.get("quantity", 0)
+                price = o.get("price_per_unit", 0)
 
-                commodity = c.get("commodity", "?")
-                qty = c.get("quantity", 0)
-                price = c.get("price_per_unit", 0)
-                side = c.get("side", "?")
+                side_color = "green" if side == "buy" else "red"
 
                 line = Text()
-                line.append(f" {st_icon} ", style=st_color)
-                line.append(f"{s_tag}", style=f"bold {s_color}")
-                line.append(f" {side} ", style="dim")
+                line.append(f" {f_tag} ", style=f"bold {f_color}")
+                line.append(f"{side:4} ", style=f"bold {side_color}")
                 line.append(f"{qty} {commodity}", style="bold")
                 line.append(f" @${price:.2f}", style="dim")
-                line.append(f" -> {r_tag}", style="dim")
                 lines.append(line)
             content = Group(*lines)
 
         return Panel(
             content,
-            title="[bold]Contracts[/]",
+            title="[bold]Order Book[/]",
             border_style="#c678dd",
-            padding=(0, 0),
-        )
-
-    def _render_messages(self) -> Panel:
-        messages = self._engine.get_messages_snapshot()
-        pane_height = max(3, self._console.height - 23)
-        visible = messages[:pane_height]
-
-        if not visible:
-            content = Text(" No messages yet...", style="dim italic")
-        else:
-            lines: list[Text] = []
-            for m in visible:
-                sender = m.get("from", "?")
-                recipient = m.get("to", "?")
-                s_style = FIRM_STYLES.get(sender, {})
-                r_style = FIRM_STYLES.get(recipient, {})
-                s_tag = s_style.get("tag", "?") if s_style else "?"
-                r_tag = r_style.get("tag", "?") if r_style else "?"
-                s_color = s_style.get("color", "grey70") if s_style else "grey70"
-
-                dt = datetime.fromtimestamp(m.get("timestamp", 0))
-                msg_content = m.get("content", "")
-
-                line = Text()
-                line.append(f" {dt.strftime('%H:%M:%S')} ", style="grey50")
-                line.append(f"{s_tag}", style=f"bold {s_color}")
-                line.append(f"->{r_tag} ", style="dim")
-                line.append(msg_content, style="")
-                lines.append(line)
-            content = Group(*lines)
-
-        return Panel(
-            content,
-            title="[bold]Messages[/]",
-            border_style="#61afef",
             padding=(0, 0),
         )
 
