@@ -19,7 +19,7 @@ from app.config import GAME_DURATION_SECONDS
 from app.events import Event
 from app.models import FACTORY_IO, FactoryType
 
-TAB_NAMES = ["Game", "Traces"]
+TAB_NAMES = ["Game", "Traces", "Debug"]
 
 
 FIRM_STYLES = {
@@ -49,11 +49,19 @@ class GameDisplay:
         self._results: list[dict] | None = None
         self._current_tab: int = 0
         self._old_termios = None
+        self._debug_log: list[str] = []
 
     # --- Event handling ---
 
     async def handle_event(self, event: Event) -> None:
         """EventBus subscriber — refresh display on any event."""
+        # Append raw event text to debug log
+        parts = [f"[{event.type.value}]"]
+        if event.firm_id:
+            parts.append(event.firm_id)
+        if event.data:
+            parts.append(str(event.data))
+        self._debug_log.append(" ".join(parts))
         self._refresh()
 
     # --- Layout: Game Screen ---
@@ -63,6 +71,8 @@ class GameDisplay:
             return self._render_results_screen()
         if self._current_tab == 1:
             return self._render_traces_screen()
+        if self._current_tab == 2:
+            return self._render_debug_screen()
         return self._render_game_screen()
 
     def _render_game_screen(self) -> Layout:
@@ -120,7 +130,7 @@ class GameDisplay:
             else:
                 bar.append(f"  {name}  ", style="dim")
         bar.append("  ", style="")
-        bar.append("tab to switch", style="dim italic")
+        bar.append("tab to switch · d for debug", style="dim italic")
         return bar
 
     def _render_header(self) -> Panel:
@@ -473,6 +483,37 @@ class GameDisplay:
             padding=(0, 0),
         )
 
+    # --- Layout: Debug Screen ---
+
+    def _render_debug_screen(self) -> Layout:
+        layout = Layout()
+        layout.split_column(
+            Layout(name="header", size=7),
+            Layout(name="debug"),
+        )
+        layout["header"].update(self._render_header())
+
+        visible_lines = max(5, self._console.height - 10)
+        entries = self._debug_log[-visible_lines:]
+
+        if not entries:
+            content = Text(" No events yet...", style="dim italic")
+        else:
+            lines: list[Text] = []
+            for entry in entries:
+                line = Text(overflow="ellipsis", no_wrap=True)
+                line.append(f" {entry}", style="")
+                lines.append(line)
+            content = Group(*lines)
+
+        layout["debug"].update(Panel(
+            content,
+            title="[bold]Debug Log[/]",
+            border_style="grey50",
+            padding=(0, 0),
+        ))
+        return layout
+
     # --- Layout: Results Screen ---
 
     def _render_results_screen(self) -> Layout:
@@ -599,6 +640,9 @@ class GameDisplay:
                 ch = os.read(fd, 1)
                 if ch == b"\t":
                     self._current_tab = (self._current_tab + 1) % len(TAB_NAMES)
+                    self._refresh()
+                elif ch == b"d" or ch == b"D":
+                    self._current_tab = 2  # Debug tab
                     self._refresh()
 
             loop.add_reader(fd, _on_stdin_ready)
