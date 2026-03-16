@@ -457,59 +457,56 @@ class GameDisplay:
                 max_h = max(max_h, h)
             bucket_heights.append(1 + max_h)  # +1 for timestamp header
 
-        # Apply scroll offset from the bottom (in buckets)
-        end_bucket = len(sorted_bucket_keys)
-        skipped = 0
-        if self._trace_scroll_offset > 0:
-            for i in range(len(sorted_bucket_keys) - 1, -1, -1):
-                bh = bucket_heights[i]
-                if skipped + bh > self._trace_scroll_offset:
-                    break
-                skipped += bh
-                end_bucket = i
+        # Build all lines per firm, then slice by scroll offset
+        total_lines = sum(bucket_heights)
 
-        # Select buckets that fit in the viewport
-        total = 0
-        start_bucket = end_bucket
-        for i in range(end_bucket - 1, -1, -1):
-            bh = bucket_heights[i]
-            if total + bh > visible_lines:
-                break
-            total += bh
-            start_bucket = i
+        # Clamp scroll offset so we don't scroll past the top
+        max_offset = max(0, total_lines - visible_lines)
+        self._trace_scroll_offset = min(self._trace_scroll_offset, max_offset)
 
-        visible_bucket_keys = sorted_bucket_keys[start_bucket:end_bucket]
+        # Line window: scroll_offset=0 means pinned to bottom
+        end_line = total_lines - self._trace_scroll_offset
+        start_line = max(0, end_line - visible_lines)
 
         for fid in ["firm_a", "firm_b", "firm_c"]:
-            layout[fid].update(self._render_trace_column(
-                fid, firm_buckets[fid], visible_bucket_keys, bucket_size,
-                bucket_heights[start_bucket:end_bucket], col_width,
-            ))
+            all_lines = self._build_trace_lines(
+                fid, firm_buckets[fid], sorted_bucket_keys, bucket_size,
+                bucket_heights, col_width,
+            )
+            visible = all_lines[start_line:end_line]
+            s = FIRM_STYLES[fid]
+            color = s["color"]
+            if visible:
+                layout[fid].update(Panel(
+                    Group(*visible),
+                    title=f"[bold {color}]{s['name']}[/]",
+                    border_style=color,
+                    padding=(0, 0),
+                ))
+            else:
+                layout[fid].update(Panel(
+                    Text(" Waiting...", style="dim italic"),
+                    title=f"[bold {color}]{s['name']}[/]",
+                    border_style=color,
+                    padding=(0, 0),
+                ))
 
         return layout
 
-    def _render_trace_column(
+    def _build_trace_lines(
         self,
         firm_id: str,
         buckets: dict[int, list[dict]],
-        visible_bucket_keys: list[int],
+        all_bucket_keys: list[int],
         bucket_size: int,
         bucket_heights: list[int],
         col_width: int,
-    ) -> Panel:
+    ) -> list[Text]:
         s = FIRM_STYLES[firm_id]
         color = s["color"]
 
-        if not visible_bucket_keys:
-            return Panel(
-                Text(" Waiting...", style="dim italic"),
-                title=f"[bold {color}]{s['name']}[/]",
-                border_style=color,
-                padding=(0, 0),
-            )
-
         lines: list[Text] = []
-        for i, bk in enumerate(visible_bucket_keys):
+        for i, bk in enumerate(all_bucket_keys):
             # Timestamp header
             mins, secs = divmod(bk, 60)
             header = Text()
@@ -544,12 +541,7 @@ class GameDisplay:
             for _ in range(pad):
                 lines.append(Text(""))
 
-        return Panel(
-            Group(*lines),
-            title=f"[bold {color}]{s['name']}[/]",
-            border_style=color,
-            padding=(0, 0),
-        )
+        return lines
 
     # --- Layout: Debug Screen ---
 
@@ -710,10 +702,10 @@ class GameDisplay:
                     # Read escape sequence for arrow keys
                     seq = os.read(fd, 2)
                     if seq == b"[A":  # Up arrow
-                        self._trace_scroll_offset += 3
+                        self._trace_scroll_offset += 1
                         self._refresh()
                     elif seq == b"[B":  # Down arrow
-                        self._trace_scroll_offset = max(0, self._trace_scroll_offset - 3)
+                        self._trace_scroll_offset = max(0, self._trace_scroll_offset - 1)
                         self._refresh()
                 elif ch == b"\t":
                     self._current_tab = (self._current_tab + 1) % len(TAB_NAMES)
