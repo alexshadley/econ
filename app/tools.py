@@ -133,7 +133,7 @@ TOOL_DEFINITIONS = [
             "name": "start_factories",
             "description": (
                 "Start running factories to convert input commodity into output commodity. "
-                "Takes 60 seconds to complete. Input commodity and cash are deducted immediately, "
+                "Takes 30 seconds to complete. Input commodity and cash are deducted immediately, "
                 "output is delivered when production finishes. "
                 "Factory types: metal (ore->metal), part (metal->parts), car (parts->cars)."
             ),
