@@ -7,7 +7,6 @@ from openai import AsyncOpenAI
 
 from app.config import INPUT_PRICE_PER_TOKEN, OPENAI_MODEL, OUTPUT_PRICE_PER_TOKEN
 from app.engine import GameEngine
-from app.events import Event, EventBus, EventType
 from app.prompts import build_system_prompt
 from app.tools import _get_tools_for_firm, dispatch_tool_call
 
@@ -30,10 +29,9 @@ def _convert_tools_for_responses_api(chat_tools: list[dict]) -> list[dict]:
 
 
 class Agent:
-    def __init__(self, firm_id: str, engine: GameEngine, event_bus: EventBus) -> None:
+    def __init__(self, firm_id: str, engine: GameEngine) -> None:
         self.firm_id = firm_id
         self.engine = engine
-        self.event_bus = event_bus
         self.client = AsyncOpenAI()
         self._running = False
         self._tools = _convert_tools_for_responses_api(_get_tools_for_firm(firm_id))
@@ -65,12 +63,7 @@ class Agent:
             await self._step()
 
     async def _step(self) -> None:
-        await self.event_bus.publish(Event(
-            type=EventType.AGENT_THINKING,
-            firm_id=self.firm_id,
-            data={},
-            timestamp=time.time(),
-        ))
+        self.engine.log_activity("agent_thinking", self.firm_id)
 
         kwargs: dict = {
             "model": OPENAI_MODEL,
@@ -112,12 +105,7 @@ class Agent:
                 except json.JSONDecodeError:
                     arguments = {}
 
-                await self.event_bus.publish(Event(
-                    type=EventType.AGENT_TOOL_CALL,
-                    firm_id=self.firm_id,
-                    data={"tool": tool_name, "args": arguments},
-                    timestamp=time.time(),
-                ))
+                self.engine.log_activity("agent_tool_call", self.firm_id, {"tool": tool_name, "args": arguments})
 
                 result = await dispatch_tool_call(
                     self.engine, self.firm_id, tool_name, arguments
