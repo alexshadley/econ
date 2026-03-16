@@ -43,17 +43,7 @@ class Agent:
         ]
 
         while self._running and self.engine.game_running:
-            try:
-                await self._step()
-            except Exception:
-                logger.exception("Agent %s error", self.firm_id)
-                await self.event_bus.publish(Event(
-                    type=EventType.AGENT_ERROR,
-                    firm_id=self.firm_id,
-                    data={"error": "agent step failed"},
-                    timestamp=time.time(),
-                ))
-                await asyncio.sleep(2)
+            await self._step()
 
     async def _step(self) -> None:
         await self.event_bus.publish(Event(
