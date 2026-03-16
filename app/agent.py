@@ -79,7 +79,7 @@ class Agent:
             "input": self._pending_input,
             "tools": self._tools,
             "tool_choice": "auto",
-            "reasoning": {"effort": "low", "summary": "concise"},
+            "reasoning": {"effort": "low", "summary": "detailed"},
         }
         if self._previous_response_id:
             kwargs["previous_response_id"] = self._previous_response_id

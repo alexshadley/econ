@@ -442,11 +442,10 @@ class GameDisplay:
                 padding=(0, 0),
             )
 
-        # Show most recent entries that fit
-        visible = entries[-max_lines:]
+        # Build all lines, then show the tail that fits
         lines: list[Text] = []
 
-        for entry in visible:
+        for entry in entries:
             if entry["type"] == "reasoning":
                 line = Text(overflow="fold")
                 line.append(" R: ", style=f"bold {color}")
@@ -461,6 +460,26 @@ class GameDisplay:
                 if args_str:
                     line.append(f" {args_str}", style="dim")
             lines.append(line)
+
+        # Keep only tail entries that fit within the available height.
+        # Reasoning entries with fold overflow may wrap, so estimate their
+        # actual line count based on the column width (~1/3 of console).
+        col_width = max(20, (self._console.width // 3) - 4)  # minus panel border
+        total_visual = 0
+        start_idx = len(lines)
+        for i in range(len(lines) - 1, -1, -1):
+            entry = entries[i]
+            if entry["type"] == "reasoning":
+                # Estimate wrapped lines for reasoning text
+                text_len = len(" R: ") + len(entry["summary"])
+                visual_lines = max(1, (text_len + col_width - 1) // col_width)
+            else:
+                visual_lines = 1
+            if total_visual + visual_lines > max_lines:
+                break
+            total_visual += visual_lines
+            start_idx = i
+        lines = lines[start_idx:]
 
         return Panel(
             Group(*lines),
