@@ -143,18 +143,23 @@ async def run_game(save_data: dict | None = None) -> None:
     signal_task = asyncio.create_task(shutdown_event.wait())
 
     done, pending = await asyncio.wait(
-        [timer_task, signal_task],
+        [timer_task, signal_task, *agent_tasks],
         return_when=asyncio.FIRST_COMPLETED,
     )
     for t in pending:
         t.cancel()
 
+    # If an agent task crashed, re-raise its exception immediately
+    for t in done:
+        if t in agent_tasks and t.exception() is not None:
+            # Stop TUI so the traceback is visible
+            display.stop()
+            raise t.exception()
+
     interrupted = shutdown_event.is_set()
     game_completed = not interrupted
 
-    # Cancel all tasks immediately — don't wait for in-flight API calls
-    for t in agent_tasks:
-        t.cancel()
+    # Cancel all remaining tasks immediately
     refresh_task.cancel()
     key_task.cancel()
     await asyncio.gather(*agent_tasks, refresh_task, key_task, return_exceptions=True)
