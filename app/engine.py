@@ -42,6 +42,7 @@ class GameEngine:
 
         # Per-agent asyncio.Event for wait/notify
         self._agent_wake_events: dict[str, asyncio.Event] = {}
+        self._agent_wake_reasons: dict[str, str] = {}
 
     def log_activity(self, event_type: str, firm_id: str | None = None, data: dict | None = None) -> None:
         parts = [f"[{event_type}]"]
@@ -189,9 +190,10 @@ class GameEngine:
 
     # --- Wake/notify for wait tool ---
 
-    def _notify_agent(self, firm_id: str) -> None:
+    def _notify_agent(self, firm_id: str, reason: str) -> None:
         ev = self._agent_wake_events.get(firm_id)
         if ev:
+            self._agent_wake_reasons[firm_id] = reason
             ev.set()
 
     async def agent_wait(self, firm_id: str, seconds: float) -> str:
@@ -199,11 +201,16 @@ class GameEngine:
         if not ev:
             return "error: unknown firm"
         ev.clear()
+        self._agent_wake_reasons.pop(firm_id, None)
+        start = time.monotonic()
         try:
             await asyncio.wait_for(ev.wait(), timeout=min(seconds, self.time_remaining()))
-            return "interrupted: new activity for your firm"
+            elapsed = time.monotonic() - start
+            reason = self._agent_wake_reasons.pop(firm_id, "unknown")
+            return f"interrupted after {elapsed:.1f}s (of {seconds:.0f}s requested): {reason}"
         except asyncio.TimeoutError:
-            return "wait completed (timeout)"
+            elapsed = time.monotonic() - start
+            return f"wait completed after {elapsed:.1f}s (timeout)"
 
     # --- Tool call tracking ---
 
@@ -459,7 +466,7 @@ class GameEngine:
         })
 
         # Wake the agent
-        self._notify_agent(job.firm_id)
+        self._notify_agent(job.firm_id, f"factory completed: {job.count} {output_commodity.value} produced")
 
     # --- Contracts ---
 
@@ -473,8 +480,8 @@ class GameEngine:
             contract.status = "expired"
         self.log_activity("contract_rejected", contract.sender_id, {"contract_id": contract_id, "reason": "expired"})
         # Wake both parties so they know the contract expired
-        self._notify_agent(contract.sender_id)
-        self._notify_agent(contract.recipient_id)
+        self._notify_agent(contract.sender_id, f"contract expired: {contract_id}")
+        self._notify_agent(contract.recipient_id, f"contract expired: {contract_id}")
 
     def _try_auto_resolve_locked(self, new_contract: Contract) -> dict | None:
         """Check if new contract can auto-resolve with an existing compatible one.
@@ -628,8 +635,9 @@ class GameEngine:
                 "total_price": auto["total_cost"],
             })
             # Wake both parties
-            self._notify_agent(auto["buyer"])
-            self._notify_agent(auto["seller"])
+            reason = f"contract auto-matched: {auto['quantity']} {auto['commodity']} traded with {auto['seller']} -> {auto['buyer']}"
+            self._notify_agent(auto["buyer"], reason)
+            self._notify_agent(auto["seller"], reason)
 
             return (
                 f"auto-matched with existing contract! "
@@ -641,7 +649,7 @@ class GameEngine:
             )
 
         # No auto-match, just a normal pending contract
-        self._notify_agent(recipient_id)
+        self._notify_agent(recipient_id, f"new contract offer received from {sender_id}")
 
         # Schedule expiry
         asyncio.create_task(self._expire_contract(str(contract.id)))
@@ -720,8 +728,8 @@ class GameEngine:
         })
 
         # Wake both parties
-        self._notify_agent(contract.sender_id)
-        self._notify_agent(contract.recipient_id)
+        self._notify_agent(contract.sender_id, f"contract accepted: {contract_id}")
+        self._notify_agent(contract.recipient_id, f"contract accepted: {contract_id}")
 
         return (
             f"contract accepted: {contract.quantity} {contract.commodity.value} "
@@ -749,7 +757,7 @@ class GameEngine:
 
         self.log_activity("contract_rejected", firm_id, {"contract_id": contract_id})
 
-        self._notify_agent(contract.sender_id)
+        self._notify_agent(contract.sender_id, f"contract rejected: {contract_id}")
 
         return f"contract {contract_id} rejected"
 
@@ -790,7 +798,7 @@ class GameEngine:
             "content": content,
         })
 
-        self._notify_agent(recipient_id)
+        self._notify_agent(recipient_id, f"new message from {sender_id} in thread {thread_id}")
 
         return f"message sent to {recipient_id} (thread: {thread_id})"
 
