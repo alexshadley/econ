@@ -4,7 +4,6 @@ import os
 import signal
 import sys
 import termios
-import time
 import tty
 from pathlib import Path
 
@@ -23,7 +22,6 @@ from rich.text import Text
 from app.agent import Agent
 from app.config import FIRM_CONFIGS, GAME_DURATION_SECONDS
 from app.engine import GameEngine
-from app.events import Event, EventBus, EventType
 from app.save import list_saves, load_save, save_game
 from app.tui import GameDisplay
 
@@ -105,8 +103,7 @@ def prompt_startup() -> dict | None:
 async def run_game(save_data: dict | None = None) -> None:
     resumed = save_data is not None
 
-    event_bus = EventBus()
-    engine = GameEngine(event_bus)
+    engine = GameEngine()
 
     if save_data:
         engine.restore_from_save(save_data)
@@ -114,9 +111,8 @@ async def run_game(save_data: dict | None = None) -> None:
         engine.setup_starting_state()
 
     display = GameDisplay(engine)
-    event_bus.subscribe_all(display.handle_event)
 
-    agents = [Agent(cfg["id"], engine, event_bus) for cfg in FIRM_CONFIGS]
+    agents = [Agent(cfg["id"], engine) for cfg in FIRM_CONFIGS]
 
     # Signal handling: use an event to interrupt the main sleep
     shutdown_event = asyncio.Event()
@@ -128,11 +124,7 @@ async def run_game(save_data: dict | None = None) -> None:
     engine.start_game()
     display.start()
 
-    await event_bus.publish(Event(
-        type=EventType.GAME_STARTED,
-        data={},
-        timestamp=time.time(),
-    ))
+    engine.log_activity("game_started")
 
     agent_tasks = [asyncio.create_task(a.run(resumed=resumed)) for a in agents]
     refresh_task = asyncio.create_task(display.run_refresh_loop())
@@ -178,11 +170,7 @@ async def run_game(save_data: dict | None = None) -> None:
         console.print(f"[bold yellow]Game interrupted.[/] State saved to [dim]{save_path.name}[/]")
         console.print()
     else:
-        await event_bus.publish(Event(
-            type=EventType.GAME_ENDED,
-            data={},
-            timestamp=time.time(),
-        ))
+        engine.log_activity("game_ended")
 
         # Re-enter TUI briefly to show results
         results = engine.get_results()

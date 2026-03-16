@@ -16,7 +16,6 @@ from rich.panel import Panel
 from rich.text import Text
 
 from app.config import GAME_DURATION_SECONDS
-from app.events import Event
 from app.models import FACTORY_IO, FactoryType
 
 TAB_NAMES = ["Game", "Traces"]
@@ -49,21 +48,7 @@ class GameDisplay:
         self._results: list[dict] | None = None
         self._current_tab: int = 0
         self._old_termios = None
-        self._debug_log: list[str] = []
         self._debug_mode = False
-
-    # --- Event handling ---
-
-    async def handle_event(self, event: Event) -> None:
-        """EventBus subscriber — refresh display on any event."""
-        # Append raw event text to debug log
-        parts = [f"[{event.type.value}]"]
-        if event.firm_id:
-            parts.append(event.firm_id)
-        if event.data:
-            parts.append(str(event.data))
-        self._debug_log.append(" ".join(parts))
-        self._refresh()
 
     # --- Layout: Game Screen ---
 
@@ -495,7 +480,7 @@ class GameDisplay:
         layout["header"].update(self._render_header())
 
         visible_lines = max(5, self._console.height - 10)
-        entries = self._debug_log[-visible_lines:]
+        entries = self._engine.get_activity_log()[-visible_lines:]
 
         if not entries:
             content = Text(" No events yet...", style="dim italic")
@@ -625,7 +610,7 @@ class GameDisplay:
         try:
             while not self._game_over:
                 self._refresh()
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.2)
         except asyncio.CancelledError:
             pass
 

@@ -14,7 +14,6 @@ from app.config import (
     STARTING_FACTORY_COUNT,
     FIRM_CONFIGS,
 )
-from app.events import Event, EventBus, EventType
 from app.models import (
     Commodity,
     Contract,
@@ -28,9 +27,8 @@ from app.models import (
 
 
 class GameEngine:
-    def __init__(self, event_bus: EventBus) -> None:
+    def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        self._event_bus = event_bus
         self._firms: dict[str, Firm] = {}
         self._contracts: dict[str, Contract] = {}
         self._messages: list[Message] = []
@@ -40,9 +38,21 @@ class GameEngine:
         self.total_api_cost: float = 0.0
         self._tool_call_log: list[dict] = []
         self._reasoning_log: list[dict] = []
+        self._activity_log: list[str] = []
 
         # Per-agent asyncio.Event for wait/notify
         self._agent_wake_events: dict[str, asyncio.Event] = {}
+
+    def log_activity(self, event_type: str, firm_id: str | None = None, data: dict | None = None) -> None:
+        parts = [f"[{event_type}]"]
+        if firm_id:
+            parts.append(firm_id)
+        if data:
+            parts.append(str(data))
+        self._activity_log.append(" ".join(parts))
+
+    def get_activity_log(self) -> list[str]:
+        return list(self._activity_log)
 
     def setup_starting_state(self) -> None:
         for cfg in FIRM_CONFIGS:
@@ -294,11 +304,7 @@ class GameEngine:
                 )
             firm.cash -= total_cost
             firm.inventory[Commodity.ORE] += quantity
-        await self._event_bus.publish(Event(
-            type=EventType.INVENTORY_CHANGED, firm_id=firm_id,
-            data={"commodity": "ore", "quantity": quantity, "action": "buy_ore"},
-            timestamp=time.time(),
-        ))
+        self.log_activity("inventory_changed", firm_id, {"commodity": "ore", "quantity": quantity, "action": "buy_ore"})
         return f"bought {quantity} ore for ${total_cost:.2f}"
 
     async def sell_cars(self, firm_id: str, quantity: int) -> str:
@@ -322,11 +328,7 @@ class GameEngine:
             total_revenue = quantity * CAR_SELL_PRICE
             firm.inventory[Commodity.CARS] -= quantity
             firm.cash += total_revenue
-        await self._event_bus.publish(Event(
-            type=EventType.INVENTORY_CHANGED, firm_id=firm_id,
-            data={"commodity": "cars", "quantity": quantity, "action": "sell_cars"},
-            timestamp=time.time(),
-        ))
+        self.log_activity("inventory_changed", firm_id, {"commodity": "cars", "quantity": quantity, "action": "sell_cars"})
         return f"sold {quantity} cars for ${total_revenue:.2f}"
 
     # --- Factory purchase ---
@@ -350,11 +352,7 @@ class GameEngine:
                 )
             firm.cash -= total_cost
             firm.factories[factory_type] += quantity
-        await self._event_bus.publish(Event(
-            type=EventType.FACTORY_PURCHASED, firm_id=firm_id,
-            data={"factory_type": factory_type_str, "quantity": quantity},
-            timestamp=time.time(),
-        ))
+        self.log_activity("factory_purchased", firm_id, {"factory_type": factory_type_str, "quantity": quantity})
         return f"bought {quantity} {factory_type_str} factory(s) for ${total_cost:.2f}"
 
     # --- Factory operations ---
@@ -425,17 +423,13 @@ class GameEngine:
             )
             self._factory_jobs.append(job)
 
-        await self._event_bus.publish(Event(
-            type=EventType.FACTORY_STARTED, firm_id=firm_id,
-            data={
-                "factory_type": factory_type_str,
-                "count": count,
-                "cost": round(total_cost, 2),
-                "input": input_commodity.value,
-                "output": output_commodity.value,
-            },
-            timestamp=time.time(),
-        ))
+        self.log_activity("factory_started", firm_id, {
+            "factory_type": factory_type_str,
+            "count": count,
+            "cost": round(total_cost, 2),
+            "input": input_commodity.value,
+            "output": output_commodity.value,
+        })
 
         # Schedule completion
         asyncio.create_task(self._complete_factory_job(job))
@@ -458,15 +452,11 @@ class GameEngine:
             firm.inventory[output_commodity] += job.count
             firm.running_factories[job.factory_type] -= job.count
 
-        await self._event_bus.publish(Event(
-            type=EventType.FACTORY_COMPLETED, firm_id=job.firm_id,
-            data={
-                "factory_type": job.factory_type.value,
-                "count": job.count,
-                "output": output_commodity.value,
-            },
-            timestamp=time.time(),
-        ))
+        self.log_activity("factory_completed", job.firm_id, {
+            "factory_type": job.factory_type.value,
+            "count": job.count,
+            "output": output_commodity.value,
+        })
 
         # Wake the agent
         self._notify_agent(job.firm_id)
@@ -481,11 +471,7 @@ class GameEngine:
             if not contract or contract.status != "pending":
                 return
             contract.status = "expired"
-        await self._event_bus.publish(Event(
-            type=EventType.CONTRACT_REJECTED, firm_id=contract.sender_id,
-            data={"contract_id": contract_id, "reason": "expired"},
-            timestamp=time.time(),
-        ))
+        self.log_activity("contract_rejected", contract.sender_id, {"contract_id": contract_id, "reason": "expired"})
         # Wake both parties so they know the contract expired
         self._notify_agent(contract.sender_id)
         self._notify_agent(contract.recipient_id)
@@ -622,33 +608,25 @@ class GameEngine:
             self._contracts[str(contract.id)] = contract
             auto = self._try_auto_resolve_locked(contract)
 
-        await self._event_bus.publish(Event(
-            type=EventType.CONTRACT_SENT, firm_id=sender_id,
-            data={
-                "contract_id": str(contract.id),
-                "to": recipient_id,
-                "commodity": commodity_str,
-                "quantity": quantity,
-                "price_per_unit": price_per_unit,
-                "side": side_str,
-            },
-            timestamp=time.time(),
-        ))
+        self.log_activity("contract_sent", sender_id, {
+            "contract_id": str(contract.id),
+            "to": recipient_id,
+            "commodity": commodity_str,
+            "quantity": quantity,
+            "price_per_unit": price_per_unit,
+            "side": side_str,
+        })
 
         if auto:
-            await self._event_bus.publish(Event(
-                type=EventType.CONTRACT_ACCEPTED, firm_id=sender_id,
-                data={
-                    "contract_id": auto["new_contract_id"],
-                    "auto_resolved_with": auto["existing_contract_id"],
-                    "buyer": auto["buyer"],
-                    "seller": auto["seller"],
-                    "commodity": auto["commodity"],
-                    "quantity": auto["quantity"],
-                    "total_price": auto["total_cost"],
-                },
-                timestamp=time.time(),
-            ))
+            self.log_activity("contract_accepted", sender_id, {
+                "contract_id": auto["new_contract_id"],
+                "auto_resolved_with": auto["existing_contract_id"],
+                "buyer": auto["buyer"],
+                "seller": auto["seller"],
+                "commodity": auto["commodity"],
+                "quantity": auto["quantity"],
+                "total_price": auto["total_cost"],
+            })
             # Wake both parties
             self._notify_agent(auto["buyer"])
             self._notify_agent(auto["seller"])
@@ -732,18 +710,14 @@ class GameEngine:
             buyer.inventory[contract.commodity] += contract.quantity
             contract.status = "accepted"
 
-        await self._event_bus.publish(Event(
-            type=EventType.CONTRACT_ACCEPTED, firm_id=firm_id,
-            data={
-                "contract_id": contract_id,
-                "buyer": buyer_id,
-                "seller": seller_id,
-                "commodity": contract.commodity.value,
-                "quantity": contract.quantity,
-                "total_price": total_cost,
-            },
-            timestamp=time.time(),
-        ))
+        self.log_activity("contract_accepted", firm_id, {
+            "contract_id": contract_id,
+            "buyer": buyer_id,
+            "seller": seller_id,
+            "commodity": contract.commodity.value,
+            "quantity": contract.quantity,
+            "total_price": total_cost,
+        })
 
         # Wake both parties
         self._notify_agent(contract.sender_id)
@@ -773,11 +747,7 @@ class GameEngine:
                 )
             contract.status = "rejected"
 
-        await self._event_bus.publish(Event(
-            type=EventType.CONTRACT_REJECTED, firm_id=firm_id,
-            data={"contract_id": contract_id},
-            timestamp=time.time(),
-        ))
+        self.log_activity("contract_rejected", firm_id, {"contract_id": contract_id})
 
         self._notify_agent(contract.sender_id)
 
@@ -814,15 +784,11 @@ class GameEngine:
         async with self._lock:
             self._messages.append(msg)
 
-        await self._event_bus.publish(Event(
-            type=EventType.MESSAGE_SENT, firm_id=sender_id,
-            data={
-                "to": recipient_id,
-                "thread_id": thread_id,
-                "content": content,
-            },
-            timestamp=time.time(),
-        ))
+        self.log_activity("message_sent", sender_id, {
+            "to": recipient_id,
+            "thread_id": thread_id,
+            "content": content,
+        })
 
         self._notify_agent(recipient_id)
 

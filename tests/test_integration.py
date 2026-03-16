@@ -14,7 +14,6 @@ from app.config import (
     STARTING_FACTORY_COUNT,
 )
 from app.engine import GameEngine
-from app.events import EventBus
 from app.models import Commodity, FactoryType
 from app.tools import dispatch_tool_call
 
@@ -25,8 +24,7 @@ from app.tools import dispatch_tool_call
 
 @pytest_asyncio.fixture
 async def engine():
-    bus = EventBus()
-    eng = GameEngine(bus)
+    eng = GameEngine()
     eng.setup_starting_state()
     eng.start_game()
     return eng
@@ -504,8 +502,7 @@ class TestAgent:
         """Smoke test: one agent, two steps — confirm the agentic loop works."""
         from app.agent import Agent
 
-        bus = EventBus()
-        agent = Agent("firm_a", engine, bus)
+        agent = Agent("firm_a", engine)
 
         step_count = 0
         original_step = agent._step
