@@ -14,33 +14,52 @@ from app.tools import _get_tools_for_firm, dispatch_tool_call
 logger = logging.getLogger(__name__)
 
 
+def _convert_tools_for_responses_api(chat_tools: list[dict]) -> list[dict]:
+    """Convert Chat Completions tool format to Responses API format."""
+    result = []
+    for tool in chat_tools:
+        func = tool["function"]
+        result.append({
+            "type": "function",
+            "name": func["name"],
+            "description": func.get("description", ""),
+            "parameters": func.get("parameters", {"type": "object", "properties": {}}),
+            "strict": False,
+        })
+    return result
+
+
 class Agent:
     def __init__(self, firm_id: str, engine: GameEngine, event_bus: EventBus) -> None:
         self.firm_id = firm_id
         self.engine = engine
         self.event_bus = event_bus
         self.client = AsyncOpenAI()
-        self.conversation_history: list[dict] = []
         self._running = False
-        self._tools = _get_tools_for_firm(firm_id)
+        self._tools = _convert_tools_for_responses_api(_get_tools_for_firm(firm_id))
+        self._instructions = build_system_prompt(firm_id)
+        self._previous_response_id: str | None = None
 
     async def run(self, resumed: bool = False) -> None:
         self._running = True
         if resumed:
-            start_msg = (
-                "This is a resumed game. You have 5 minutes. "
-                "Check your current state first — you may already have cash, inventory, and factories from the previous session. "
-                "Then start trading and producing."
-            )
+            self._pending_input = [{
+                "role": "user",
+                "content": (
+                    "This is a resumed game. You have 5 minutes. "
+                    "Check your current state first — you may already have cash, "
+                    "inventory, and factories from the previous session. "
+                    "Then start trading and producing."
+                ),
+            }]
         else:
-            start_msg = (
-                "The game has started. You have 5 minutes. "
-                "Begin by checking your state, then start trading and producing."
-            )
-        self.conversation_history = [
-            {"role": "system", "content": build_system_prompt(self.firm_id)},
-            {"role": "user", "content": start_msg},
-        ]
+            self._pending_input = [{
+                "role": "user",
+                "content": (
+                    "The game has started. You have 5 minutes. "
+                    "Begin by checking your state, then start trading and producing."
+                ),
+            }]
 
         while self._running and self.engine.game_running:
             await self._step()
@@ -53,54 +72,43 @@ class Agent:
             timestamp=time.time(),
         ))
 
-        response = await self.client.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=self.conversation_history,
-            tools=self._tools,
-            tool_choice="auto",
-            reasoning_effort="high",
-            reasoning={"summary": "auto"},
-        )
+        kwargs: dict = {
+            "model": OPENAI_MODEL,
+            "instructions": self._instructions,
+            "input": self._pending_input,
+            "tools": self._tools,
+            "tool_choice": "auto",
+            "reasoning": {"effort": "high", "summary": "concise"},
+        }
+        if self._previous_response_id:
+            kwargs["previous_response_id"] = self._previous_response_id
+
+        response = await self.client.responses.create(**kwargs)
+        self._previous_response_id = response.id
+        self._pending_input = []  # clear; server tracks history
 
         if response.usage:
             cost = (
-                response.usage.prompt_tokens * INPUT_PRICE_PER_TOKEN
-                + response.usage.completion_tokens * OUTPUT_PRICE_PER_TOKEN
+                response.usage.input_tokens * INPUT_PRICE_PER_TOKEN
+                + response.usage.output_tokens * OUTPUT_PRICE_PER_TOKEN
             )
             self.engine.total_api_cost += cost
 
-        message = response.choices[0].message
+        # Process output items
+        has_tool_calls = False
 
-        # Record reasoning summary if present
-        reasoning_content = getattr(message, "reasoning_content", None)
-        if reasoning_content:
-            self.engine.record_reasoning_summary(
-                self.firm_id, reasoning_content, time.time()
-            )
+        for item in response.output:
+            if item.type == "reasoning":
+                for summary_part in item.summary:
+                    self.engine.record_reasoning_summary(
+                        self.firm_id, summary_part.text, time.time()
+                    )
 
-        # Append assistant message to history
-        msg_dict: dict = {"role": "assistant"}
-        if message.content:
-            msg_dict["content"] = message.content
-        if message.tool_calls:
-            msg_dict["tool_calls"] = [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
-                    },
-                }
-                for tc in message.tool_calls
-            ]
-        self.conversation_history.append(msg_dict)
-
-        if message.tool_calls:
-            for tool_call in message.tool_calls:
-                tool_name = tool_call.function.name
+            elif item.type == "function_call":
+                has_tool_calls = True
+                tool_name = item.name
                 try:
-                    arguments = json.loads(tool_call.function.arguments)
+                    arguments = json.loads(item.arguments)
                 except json.JSONDecodeError:
                     arguments = {}
 
@@ -119,15 +127,17 @@ class Agent:
                     self.firm_id, tool_name, arguments, result, time.time()
                 )
 
-                self.conversation_history.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "content": result,
+                # Send tool output in the next request
+                self._pending_input.append({
+                    "type": "function_call_output",
+                    "call_id": item.call_id,
+                    "output": result,
                 })
-        else:
+
+        if not has_tool_calls:
             # Model produced text only - nudge it to act
             remaining = self.engine.time_remaining()
-            self.conversation_history.append({
+            self._pending_input.append({
                 "role": "user",
                 "content": f"Time remaining: {remaining:.0f}s. Use your tools to take action.",
             })
