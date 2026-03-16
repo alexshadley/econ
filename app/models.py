@@ -24,9 +24,20 @@ FACTORY_IO: dict[FactoryType, tuple[Commodity, Commodity]] = {
 }
 
 
-class ContractSide(str, Enum):
-    BUY = "buy"  # sender wants to buy
-    SELL = "sell"  # sender wants to sell
+class OrderSide(str, Enum):
+    BUY = "buy"
+    SELL = "sell"
+
+
+class Order(BaseModel):
+    id: UUID
+    firm_id: str
+    commodity: Commodity
+    quantity: int
+    price_per_unit: float
+    side: OrderSide
+    status: str  # "open", "filled", "cancelled"
+    created_at: float
 
 
 class Firm(BaseModel):
@@ -36,31 +47,6 @@ class Firm(BaseModel):
     inventory: dict[Commodity, int]
     factories: dict[FactoryType, int]
     running_factories: dict[FactoryType, int]
-
-
-class Contract(BaseModel):
-    id: UUID
-    sender_id: str
-    recipient_id: str
-    commodity: Commodity
-    quantity: int
-    price_per_unit: float
-    side: ContractSide
-    status: str  # "pending", "accepted", "rejected"
-    created_at: float
-
-
-class Message(BaseModel):
-    id: UUID
-    sender_id: str
-    recipient_id: str
-    thread_id: str
-    content: str
-    timestamp: float
-    read_by: set[str]
-
-    class Config:
-        arbitrary_types_allowed = True
 
 
 class FactoryJob(BaseModel):

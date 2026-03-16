@@ -158,6 +158,10 @@ async def run_game(save_data: dict | None = None) -> None:
 
     engine.stop_game()
 
+    # Return escrowed resources and complete in-progress jobs
+    engine.finalize_orders()
+    engine.finalize_factory_jobs()
+
     # Stop TUI before saving so terminal is clean
     display.stop()
 
